@@ -1,6 +1,6 @@
 from rest_framework import viewsets, permissions
 from .models import Quiz, Question, Choix
-from .serializers import QuizSerializer, QuestionSerializer, ChoixSerializer
+from .serializers import QuizSerializer, QuestionReadSerializer, ChoixSerializer
 
 
 class QuizViewSet(viewsets.ModelViewSet):
@@ -24,7 +24,7 @@ class QuizViewSet(viewsets.ModelViewSet):
 
 class QuestionViewSet(viewsets.ModelViewSet):
     queryset = Question.objects.prefetch_related('choix').all()
-    serializer_class = QuestionSerializer
+    serializer_class = QuestionReadSerializer
 
 
 class ChoixViewSet(viewsets.ModelViewSet):
