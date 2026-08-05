@@ -5,6 +5,9 @@ export default function Enseignants() {
   const [enseignants, setEnseignants] = useState([]);
   const [classes, setClasses] = useState([]);
   const [showInvite, setShowInvite] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editEnseignant, setEditEnseignant] = useState(null);
+  const [editForm, setEditForm] = useState({ first_name: '', last_name: '', email: '', telephone: '', is_active: true, classes: [] });
   const [form, setForm] = useState({ email: '', first_name: '', last_name: '', telephone: '', mot_de_passe: '', classes: [] });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -38,10 +41,52 @@ export default function Enseignants() {
     }
   };
 
+  const openEdit = async (enseignant) => {
+    setEditEnseignant(enseignant);
+    setEditForm({
+      first_name: enseignant.first_name || '',
+      last_name: enseignant.last_name || '',
+      email: enseignant.email || '',
+      telephone: enseignant.telephone || '',
+      is_active: enseignant.is_active,
+      classes: enseignant.classes_assignees?.map((c) => c.id) || [],
+    });
+    setShowEdit(true);
+  };
+
+  const handleEdit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+    setLoading(true);
+    try {
+      const { classes: classesIds, ...userFields } = editForm;
+      await api.patch(`/accounts/users/${editEnseignant.id}/`, userFields);
+      await api.post(`/accounts/users/${editEnseignant.id}/update_classes/`, { classes: classesIds });
+      setMessage('Enseignant modifié avec succès');
+      setShowEdit(false);
+      setEditEnseignant(null);
+      fetchEnseignants();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Erreur lors de la modification');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDelete = async (id) => {
     if (window.confirm('Supprimer cet enseignant ?')) {
       await api.delete(`/accounts/users/${id}/`);
       fetchEnseignants();
+    }
+  };
+
+  const toggleEditClasse = (classeId) => {
+    const current = editForm.classes;
+    if (current.includes(classeId)) {
+      setEditForm({ ...editForm, classes: current.filter((id) => id !== classeId) });
+    } else {
+      setEditForm({ ...editForm, classes: [...current, classeId] });
     }
   };
 
@@ -103,6 +148,7 @@ export default function Enseignants() {
                     )}
                   </td>
                   <td>
+                    <button className="btn btn-sm btn-primary" style={{ marginRight: '6px' }} onClick={() => openEdit(e)}>Modifier</button>
                     <button className="btn btn-sm btn-danger" onClick={() => handleDelete(e.id)}>Supprimer</button>
                   </td>
                 </tr>
@@ -111,6 +157,79 @@ export default function Enseignants() {
           </table>
         )}
       </div>
+
+      {showEdit && editEnseignant && (
+        <div className="modal-overlay" onClick={() => setShowEdit(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Modifier l'enseignant</h3>
+              <button className="close-btn" onClick={() => setShowEdit(false)}>×</button>
+            </div>
+            <form onSubmit={handleEdit}>
+              <div className="modal-body">
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Prénom</label>
+                    <input value={editForm.first_name} onChange={(e) => setEditForm({...editForm, first_name: e.target.value})} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Nom</label>
+                    <input value={editForm.last_name} onChange={(e) => setEditForm({...editForm, last_name: e.target.value})} required />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Email</label>
+                  <input type="email" value={editForm.email} onChange={(e) => setEditForm({...editForm, email: e.target.value})} required />
+                </div>
+                <div className="form-group">
+                  <label>Téléphone</label>
+                  <input value={editForm.telephone} onChange={(e) => setEditForm({...editForm, telephone: e.target.value})} />
+                </div>
+                <div className="form-group">
+                  <label>Classes assignées</label>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                    {classes.map((c) => (
+                      <label key={c.id} style={{
+                        display: 'flex', alignItems: 'center', gap: '6px',
+                        padding: '6px 12px', borderRadius: '6px', cursor: 'pointer',
+                        border: editForm.classes.includes(c.id) ? '2px solid var(--primary)' : '1px solid var(--gray-200)',
+                        background: editForm.classes.includes(c.id) ? 'var(--primary-light, rgba(59,130,246,0.1))' : 'white',
+                        fontSize: '0.85rem'
+                      }}>
+                        <input
+                          type="checkbox"
+                          checked={editForm.classes.includes(c.id)}
+                          onChange={() => toggleEditClasse(c.id)}
+                          style={{ width: 'auto' }}
+                        />
+                        {c.libelle} ({c.code})
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Statut</label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={editForm.is_active}
+                      onChange={(e) => setEditForm({...editForm, is_active: e.target.checked})}
+                      style={{ width: 'auto' }}
+                    />
+                    Actif
+                  </label>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowEdit(false)}>Annuler</button>
+                <button type="submit" className="btn btn-primary" disabled={loading}>
+                  {loading ? 'Enregistrement...' : 'Enregistrer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {showInvite && (
         <div className="modal-overlay" onClick={() => setShowInvite(false)}>

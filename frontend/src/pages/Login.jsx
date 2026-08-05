@@ -74,9 +74,6 @@ export default function Login() {
           <div className="auth-link">
             <Link to="/forgot-password">Mot de passe oublié ?</Link>
           </div>
-          <div className="auth-link" style={{ marginTop: '12px' }}>
-            <Link to="/register">Créer un compte admin</Link>
-          </div>
         </div>
       </div>
     </div>

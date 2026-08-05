@@ -6,6 +6,9 @@ export default function StudentManagement() {
   const [classes, setClasses] = useState([]);
   const [showInvite, setShowInvite] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editStudent, setEditStudent] = useState(null);
+  const [editForm, setEditForm] = useState({ first_name: '', last_name: '', email: '', matricule: '', is_active: true });
   const [inviteForm, setInviteForm] = useState({ email: '', first_name: '', last_name: '', matricule: '', classe: '', mot_de_passe: '' });
   const [importFile, setImportFile] = useState(null);
   const [message, setMessage] = useState('');
@@ -70,6 +73,36 @@ export default function StudentManagement() {
     }
   };
 
+  const openEdit = (student) => {
+    setEditStudent(student);
+    setEditForm({
+      first_name: student.first_name || '',
+      last_name: student.last_name || '',
+      email: student.email || '',
+      matricule: student.matricule || '',
+      is_active: student.is_active,
+    });
+    setShowEdit(true);
+  };
+
+  const handleEdit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+    setLoading(true);
+    try {
+      await api.patch(`/accounts/users/${editStudent.id}/`, editForm);
+      setMessage('Étudiant modifié avec succès');
+      setShowEdit(false);
+      setEditStudent(null);
+      fetchStudents();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Erreur lors de la modification');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDelete = async (id) => {
     if (window.confirm('Supprimer cet étudiant ?')) {
       await api.delete(`/accounts/users/${id}/`);
@@ -129,6 +162,7 @@ export default function StudentManagement() {
                   )}
                 </td>
                 <td>
+                  <button className="btn btn-sm btn-primary" style={{ marginRight: '6px' }} onClick={() => openEdit(s)}>Modifier</button>
                   <button className="btn btn-sm btn-danger" onClick={() => handleDelete(s.id)}>Supprimer</button>
                 </td>
               </tr>
@@ -136,6 +170,57 @@ export default function StudentManagement() {
           </tbody>
         </table>
       </div>
+
+      {showEdit && editStudent && (
+        <div className="modal-overlay" onClick={() => setShowEdit(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Modifier l'étudiant</h3>
+              <button className="close-btn" onClick={() => setShowEdit(false)}>×</button>
+            </div>
+            <form onSubmit={handleEdit}>
+              <div className="modal-body">
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Prénom</label>
+                    <input value={editForm.first_name} onChange={(e) => setEditForm({...editForm, first_name: e.target.value})} required />
+                  </div>
+                  <div className="form-group">
+                    <label>Nom</label>
+                    <input value={editForm.last_name} onChange={(e) => setEditForm({...editForm, last_name: e.target.value})} required />
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label>Email</label>
+                  <input type="email" value={editForm.email} onChange={(e) => setEditForm({...editForm, email: e.target.value})} required />
+                </div>
+                <div className="form-group">
+                  <label>Matricule</label>
+                  <input value={editForm.matricule} onChange={(e) => setEditForm({...editForm, matricule: e.target.value})} />
+                </div>
+                <div className="form-group">
+                  <label>Statut</label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={editForm.is_active}
+                      onChange={(e) => setEditForm({...editForm, is_active: e.target.checked})}
+                      style={{ width: 'auto' }}
+                    />
+                    Actif
+                  </label>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowEdit(false)}>Annuler</button>
+                <button type="submit" className="btn btn-primary" disabled={loading}>
+                  {loading ? 'Enregistrement...' : 'Enregistrer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {showInvite && (
         <div className="modal-overlay" onClick={() => setShowInvite(false)}>

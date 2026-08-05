@@ -74,8 +74,8 @@ cd frontend && npm run dev
 | `superadmin` | Admin plateforme PEL (crée les établissements, valide les admins) |
 | `admin` | Admin d'un établissement (gère étudiants, enseignants, filières, quiz, devoirs) |
 | `responsable_formation` | Responsable pédagogique |
-| `enseignant` | Crée et corrige les quiz et devoirs de programmation |
-| `etudiant` | Passe les évaluations, soumet des codes |
+| `enseignant` | Crée et corrige les quiz et devoirs de programmation, gère les notes |
+| `etudiant` | Passe les évaluations, soumet des codes, consulte ses notes |
 
 ## Architecture
 
@@ -84,16 +84,16 @@ PEL/
 ├── backend/
 │   ├── accounts/          # Utilisateurs, auth, invitations
 │   ├── referentiel/       # Filieres, niveaux, UE, EC, classes, affectations
-│   ├── quiz/              # Quiz, questions, choix
-│   ├── programming/       # Devoirs, soumissions, exécution de code
+│   ├── quiz/              # Quiz, questions, choix, résultats
+│   ├── programming/       # Devoirs, soumissions, exécution de code, notes par matière
 │   ├── reporting/         # Statistiques
 │   └── config/            # Settings Django, URLs
 ├── frontend/
 │   └── src/
 │       ├── pages/
 │       │   ├── admin/     # Gestion admin (étudiants, enseignants, quiz, devoirs)
-│       │   ├── teacher/   # Enseignant (mes cours, mes quiz, mes devoirs, corrections, stats)
-│       │   └── student/   # Étudiant (quiz disponibles, mes devoirs, mes résultats)
+│       │   ├── teacher/   # Enseignant (mes cours, mes quiz, mes devoirs, corrections, gestion notes, stats)
+│       │   └── student/   # Étudiant (quiz disponibles, mes devoirs, mes notes, mes résultats)
 │       ├── components/    # CodeEditor, CountdownTimer, Layout
 │       ├── context/       # AuthContext
 │       └── services/      # API axios
@@ -127,9 +127,11 @@ PEL/
 - Classes, groupes (TD/TP)
 - Inscriptions étudiants
 - Affectations enseignants → classes
+- **Filtrage par rôle** : l'enseignant ne voit que ses filières, niveaux, classes et matières assignées
 
 ### Quiz
 - QCM, vrai/faux, réponses courtes
+- **Création avec questions intégrées** (admin et enseignant)
 - Filtrage par filière, niveau, année académique
 - Quiz publiés / brouillons
 - Timer de passation
@@ -137,19 +139,36 @@ PEL/
 
 ### Devoirs de programmation
 - Langages : Python, Java, C, C++, JavaScript
+- **Langage imposé** : l'enseignant choisit le langage, l'étudiant ne peut pas le changer
 - **Monaco Editor** intégré (dark theme, syntax highlighting)
 - **Exécution de code** côté serveur (Python/JS, timeout 10s)
-- **Cas de test** avec vérification automatique
-- Code initial fourni aux étudiants
+- **Cas de test** avec vérification automatique (entrée → sortie attendue)
+- Code initial fourni aux étudiants (lecture seule)
 - Solution de référence (cachée aux étudiants)
 - Timer avec soumission automatique
 - Date limite de soumission
+- **Matière (EC) associée** au devoir
+
+### Exécution de code
+- L'étudiant exécute son code et voit le résultat
+- **Les détails d'erreur sont masqués** (pas de stack trace, juste "Votre code contient des erreurs")
+- Les tests échoués affichent juste "Réussi" / "Échoué" (pas les inputs/outputs)
+- L'enseignant voit les détails complets pour corriger
 
 ### Corrections
 - Vue des soumissions par devoir
 - Code soumis affiché dans Monaco Editor (read-only)
-- Notation (score / points_max) + commentaire
+- **Notation** (score / points_max) + **remarques** directement visibles par l'étudiant
 - Statistiques : total, corrigées, en attente
+
+### Notes par matière
+- **Devoir (manuelle)** : note saisie par le prof via Gestion des notes
+- **Devoir (prog)** : score calculé automatiquement depuis les soumissions de programmation
+  - Formule : `(score / points_max) × 20`, moyenne sur tous les devoirs de la matière
+- **Examen** : note saisie manuellement par le prof
+- **Moyenne** = `max(devoir_manuelle, devoir_prog) × 0.4 + examen × 0.6`
+- L'étudiant voit les deux notes de devoir et la moyenne calculée
+- Le prof voit la note de prog auto-calculée à côté de sa saisie manuelle
 
 ### Sécurité
 - Mot de passe fort (8+ car., majuscule, chiffre, spécial)
@@ -158,7 +177,7 @@ PEL/
 - CORS restreint
 - Variables d'environnement pour les secrets
 - Changement de mot de passe forcé à la première connexion
-- Les étudiants ne voient pas la solution ni les cas de test
+- Les étudiants ne voient pas la solution, les cas de test, ni les détails d'erreur
 
 ## API Endpoints
 
@@ -184,26 +203,31 @@ PEL/
 ### Référentiel
 - `/api/referentiel/etablissements/`
 - `/api/referentiel/annees-academiques/` (+ `create_with_filieres/`)
-- `/api/referentiel/filieres/`
-- `/api/referentiel/niveaux/`
+- `/api/referentiel/filieres/` — filtré par établissement (admin) ou affectations (enseignant)
+- `/api/referentiel/niveaux/` — filtré par classes assignées (enseignant)
 - `/api/referentiel/ues/`
-- `/api/referentiel/ecs/`
+- `/api/referentiel/ecs/` — filtré par `?classe=` et affectations (enseignant)
 - `/api/referentiel/cours/`
-- `/api/referentiel/classes/`
+- `/api/referentiel/classes/` — filtré par affectations (enseignant)
 - `/api/referentiel/groupes/`
 - `/api/referentiel/inscriptions/`
 - `/api/referentiel/affectations-enseignants/`
 
 ### Quiz
-- `/api/quiz/quizzes/` - CRUD quiz (enseignant : ses quiz, admin : son établissement)
+- `/api/quiz/quizzes/` - CRUD quiz avec questions imbriquées (enseignant : ses quiz, admin : son établissement)
 - `/api/quiz/questions/` - CRUD questions
 - `/api/quiz/choix/` - CRUD choix
 
 ### Programmation
 - `/api/programming/devoirs/` - CRUD devoirs (enseignant : ses devoirs, admin : son établissement)
-- `POST /api/programming/devoirs/{id}/execute/` - Exécuter du code (Python/JS)
+- `POST /api/programming/devoirs/{id}/execute/` - Exécuter du code (masque les erreurs aux étudiants)
 - `/api/programming/soumissions/` - Soumissions étudiants
-- `POST /api/programming/soumissions/{id}/corriger/` - Corriger une soumission
+- `POST /api/programming/soumissions/{id}/corriger/` - Corriger une soumission (score + remarques)
+
+### Notes
+- `/api/programming/notes/` - CRUD notes par matière
+- `POST /api/programming/notes/bulk_update/` - Mise à jour en masse des notes
+- `GET /api/programming/notes/mes_notes/` - Notes de l'étudiant (avec note de prog calculée)
 
 ## Import CSV/Excel
 

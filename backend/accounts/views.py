@@ -526,11 +526,17 @@ L'équipe PEL"""
 
         classes_ids = data.get('classes', [])
         if classes_ids:
-            from referentiel.models import Classe, AffectationEnseignant
+            from referentiel.models import Classe, AffectationEnseignant, EnseignantMatiere, UE, EC
             for cid in classes_ids:
                 try:
                     classe = Classe.objects.get(id=cid)
                     AffectationEnseignant.objects.create(enseignant=user, classe=classe)
+                    ue_ids = UE.objects.filter(filiere=classe.filiere, niveau=classe.niveau).values_list('id', flat=True)
+                    ec_ids = EC.objects.filter(ue_id__in=ue_ids).values_list('id', flat=True)
+                    for ec_id in ec_ids:
+                        EnseignantMatiere.objects.get_or_create(
+                            enseignant=user, ec_id=ec_id, classe=classe
+                        )
                 except Classe.DoesNotExist:
                     continue
 
@@ -538,6 +544,29 @@ L'équipe PEL"""
             "message": f"Enseignant créé : {data['email']}" + (" — connexion directe disponible" if mot_de_passe else " — en attente de configuration du mot de passe"),
             "user_id": user.id
         }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrSuperAdmin])
+    def update_classes(self, request, pk=None):
+        user = self.get_object()
+        if user.role != 'enseignant':
+            return Response({"error": "Cet utilisateur n'est pas un enseignant"}, status=status.HTTP_400_BAD_REQUEST)
+        classes_ids = request.data.get('classes', [])
+        from referentiel.models import Classe, AffectationEnseignant, EnseignantMatiere, UE, EC
+        AffectationEnseignant.objects.filter(enseignant=user).delete()
+        EnseignantMatiere.objects.filter(enseignant=user).delete()
+        for cid in classes_ids:
+            try:
+                classe = Classe.objects.get(id=cid)
+                AffectationEnseignant.objects.create(enseignant=user, classe=classe)
+                ue_ids = UE.objects.filter(filiere=classe.filiere, niveau=classe.niveau).values_list('id', flat=True)
+                ec_ids = EC.objects.filter(ue_id__in=ue_ids).values_list('id', flat=True)
+                for ec_id in ec_ids:
+                    EnseignantMatiere.objects.get_or_create(
+                        enseignant=user, ec_id=ec_id, classe=classe
+                    )
+            except Classe.DoesNotExist:
+                continue
+        return Response({"message": "Classes mises à jour avec succès"})
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def dashboard_stats(self, request):

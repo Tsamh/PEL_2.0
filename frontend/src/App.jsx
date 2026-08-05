@@ -25,8 +25,10 @@ import MesCours from './pages/teacher/MesCours';
 import MesQuiz from './pages/teacher/MesQuiz';
 import MesDevoirsRouter from './pages/MesDevoirsRouter';
 import Statistiques from './pages/teacher/Statistiques';
+import GestionNotes from './pages/teacher/GestionNotes';
 import QuizDisponibles from './pages/student/QuizDisponibles';
 import MesResultats from './pages/student/MesResultats';
+import MesNotes from './pages/student/MesNotes';
 import Layout from './components/Layout';
 import './App.css';
 
@@ -71,8 +73,10 @@ function App() {
             <Route path="mes-cours" element={<MesCours />} />
             <Route path="mes-quiz" element={<MesQuiz />} />
             <Route path="mes-devoirs" element={<MesDevoirsRouter />} />
+            <Route path="gestion-notes" element={<GestionNotes />} />
             <Route path="statistiques" element={<Statistiques />} />
             <Route path="quiz-disponibles" element={<QuizDisponibles />} />
+            <Route path="mes-notes" element={<MesNotes />} />
             <Route path="mes-resultats" element={<MesResultats />} />
           </Route>
           <Route path="/changer-mot-de-passe" element={<PrivateRoute><ForceChangePassword /></PrivateRoute>} />

@@ -12,13 +12,14 @@ export default function DevoirManagement() {
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [form, setForm] = useState({
-    titre: '', description: '', filiere: '', niveau: '', annee_academique: '',
+    titre: '', description: '', filiere: '', niveau: '', annee_academique: '', ec: '',
     langage: 'python', code_initial: '', solution: '', test_cases: [],
     date_debut: '', date_fin: '', points_max: 20, est_publie: false,
   });
   const [filieres, setFilieres] = useState([]);
   const [niveaux, setNiveaux] = useState([]);
   const [annees, setAnnees] = useState([]);
+  const [ecs, setEcs] = useState([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export default function DevoirManagement() {
     api.get('/referentiel/filieres/').then((res) => setFilieres(res.data.results || res.data));
     api.get('/referentiel/niveaux/').then((res) => setNiveaux(res.data.results || res.data));
     api.get('/referentiel/annees-academiques/').then((res) => setAnnees(res.data.results || res.data));
+    api.get('/referentiel/ecs/').then((res) => setEcs(res.data.results || res.data));
   }, []);
 
   const fetchItems = async () => {
@@ -42,7 +44,7 @@ export default function DevoirManagement() {
 
   const openCreate = () => {
     setEditingItem(null);
-    setForm({ titre: '', description: '', filiere: '', niveau: '', annee_academique: '', langage: 'python', code_initial: '', solution: '', test_cases: [], date_debut: '', date_fin: '', points_max: 20, est_publie: false });
+    setForm({ titre: '', description: '', filiere: '', niveau: '', annee_academique: '', ec: '', langage: 'python', code_initial: '', solution: '', test_cases: [], date_debut: '', date_fin: '', points_max: 20, est_publie: false });
     setShowForm(true);
   };
 
@@ -51,6 +53,7 @@ export default function DevoirManagement() {
     setForm({
       titre: item.titre, description: item.description || '',
       filiere: item.filiere || '', niveau: item.niveau || '', annee_academique: item.annee_academique || '',
+      ec: item.ec || '',
       langage: item.langage, code_initial: item.code_initial || '', solution: item.solution || '',
       test_cases: item.test_cases || [],
       date_debut: item.date_debut || null, date_fin: item.date_fin || null,
@@ -68,6 +71,7 @@ export default function DevoirManagement() {
         filiere: form.filiere || null,
         niveau: form.niveau || null,
         annee_academique: form.annee_academique || null,
+        ec: form.ec || null,
         date_debut: form.date_debut || null,
         date_fin: form.date_fin || null,
       };
@@ -148,6 +152,15 @@ export default function DevoirManagement() {
                       {annees.map((a) => <option key={a.id} value={a.id}>{a.libelle}</option>)}
                     </select>
                   </div>
+                  <div className="form-group">
+                    <label>Matière (EC)</label>
+                    <select value={form.ec} onChange={(e) => setForm({...form, ec: e.target.value})}>
+                      <option value="">-- Toutes --</option>
+                      {ecs.map((ec) => <option key={ec.id} value={ec.id}>{ec.libelle}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="form-row">
                   <div className="form-group">
                     <label>Langage</label>
                     <select value={form.langage} onChange={(e) => setForm({...form, langage: e.target.value})}>

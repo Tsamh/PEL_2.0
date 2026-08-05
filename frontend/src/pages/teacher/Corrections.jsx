@@ -163,12 +163,12 @@ export default function Corrections() {
                   />
                 </div>
                 <div className="form-group" style={{ flex: 1 }}>
-                  <label>Commentaire</label>
+                  <label>Remarques</label>
                   <textarea
                     value={commentaire}
                     onChange={(e) => setCommentaire(e.target.value)}
                     rows={3}
-                    placeholder="Commentaire pour l'étudiant..."
+                    placeholder="Remarques pour l'étudiant (style, logique, optimisation...)..."
                   />
                 </div>
               </div>

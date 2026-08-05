@@ -25,6 +25,8 @@ const teacherMenu = [
   { path: '/mes-cours', label: 'Mes cours' },
   { path: '/mes-quiz', label: 'Mes quiz' },
   { path: '/mes-devoirs', label: 'Mes devoirs' },
+  { section: 'Notes' },
+  { path: '/gestion-notes', label: 'Gestion des notes' },
   { section: 'Résultats' },
   { path: '/statistiques', label: 'Statistiques' },
 ];
@@ -36,6 +38,7 @@ const studentMenu = [
   { path: '/quiz-disponibles', label: 'Quiz disponibles' },
   { path: '/mes-devoirs', label: 'Mes devoirs' },
   { section: 'Résultats' },
+  { path: '/mes-notes', label: 'Mes notes' },
   { path: '/mes-resultats', label: 'Mes résultats' },
 ];
 

@@ -17,7 +17,6 @@ export default function DevoirDetail() {
 
   const [executing, setExecuting] = useState(false);
   const [execResult, setExecResult] = useState(null);
-  const [execError, setExecError] = useState('');
   const [showResults, setShowResults] = useState(false);
 
   useEffect(() => {
@@ -75,17 +74,13 @@ export default function DevoirDetail() {
 
   const handleExecute = async () => {
     setExecuting(true);
-    setExecError('');
     setExecResult(null);
     setShowResults(true);
     try {
-      const res = await api.post(`/programming/devoirs/${id}/execute/`, {
-        code,
-        language: devoir?.langage || 'python',
-      });
+      const res = await api.post(`/programming/devoirs/${id}/execute/`, { code });
       setExecResult(res.data);
     } catch (err) {
-      setExecError(err.response?.data?.error || "Erreur lors de l'exécution.");
+      setExecResult({ success: false, message: "Erreur lors de l'exécution." });
     } finally {
       setExecuting(false);
     }
@@ -131,13 +126,15 @@ export default function DevoirDetail() {
               {soumission.statut === 'corrige' ? 'Corrigé' : 'Soumis'}
             </span>
             {soumission.score !== null && soumission.score !== undefined && (
-              <span style={{ marginLeft: '12px', fontWeight: 600 }}>{soumission.score} / {devoir.points_max}</span>
+              <span style={{ marginLeft: '12px', fontWeight: 600, fontSize: '1.1rem' }}>
+                {soumission.score} / {devoir.points_max}
+              </span>
             )}
           </div>
           {soumission.commentaire && (
-            <div style={{ marginBottom: '16px' }}>
-              <strong>Commentaire :</strong>
-              <p style={{ color: 'var(--gray-600)', marginTop: '4px' }}>{soumission.commentaire}</p>
+            <div style={{ marginBottom: '16px', padding: '12px', background: 'var(--primary-50, #eff6ff)', borderRadius: '8px', borderLeft: '4px solid var(--primary)' }}>
+              <strong style={{ color: 'var(--primary)' }}>Remarques de l'enseignant :</strong>
+              <p style={{ color: 'var(--gray-700)', marginTop: '4px' }}>{soumission.commentaire}</p>
             </div>
           )}
           <h4 style={{ marginBottom: '8px' }}>Code soumis :</h4>
@@ -150,6 +147,11 @@ export default function DevoirDetail() {
               Le temps imparti pour ce devoir est écoulé.
             </div>
           )}
+
+          <div className="form-card" style={{ marginBottom: '12px', padding: '12px 16px', background: 'var(--gray-50, #f9fafb)', borderLeft: '4px solid var(--primary)' }}>
+            <span style={{ fontWeight: 600, color: 'var(--primary)' }}>Langage imposé : {langageLabel[devoir?.langage]}</span>
+            <span style={{ color: 'var(--gray-500)', marginLeft: '8px' }}>(non modifiable)</span>
+          </div>
 
           {devoir?.code_initial && (
             <div className="form-card" style={{ marginBottom: '24px' }}>
@@ -184,7 +186,6 @@ export default function DevoirDetail() {
           {showResults && (
             <div className="form-card" style={{ marginTop: '24px' }}>
               <h3>Résultats de l'exécution</h3>
-              {execError && <div className="alert alert-error">{execError}</div>}
               {executing && <div className="loading">Exécution en cours...</div>}
               {execResult && (
                 <>
@@ -196,6 +197,12 @@ export default function DevoirDetail() {
                       <span style={{ color: 'var(--gray-500)' }}>⏱ {execResult.execution_time}</span>
                     )}
                   </div>
+
+                  {!execResult.success && execResult.message && (
+                    <div className="alert alert-error" style={{ marginBottom: '16px' }}>
+                      {execResult.message}
+                    </div>
+                  )}
 
                   {execResult.output && (
                     <div style={{ marginBottom: '16px' }}>
@@ -210,34 +217,20 @@ export default function DevoirDetail() {
                     </div>
                   )}
 
-                  {execResult.errors && (
-                    <div style={{ marginBottom: '16px' }}>
-                      <label style={{ fontWeight: 600, display: 'block', marginBottom: '4px', color: 'var(--danger, #ef4444)' }}>Erreurs :</label>
-                      <pre style={{
-                        background: 'var(--gray-900, #1a1a1a)', color: '#fca5a5',
-                        padding: '12px', borderRadius: '8px', overflow: 'auto',
-                        fontFamily: 'monospace', fontSize: '0.85rem', maxHeight: '200px'
-                      }}>
-                        {execResult.errors}
-                      </pre>
-                    </div>
-                  )}
-
                   {execResult.test_results?.length > 0 && (
                     <div>
-                      <label style={{ fontWeight: 600, display: 'block', marginBottom: '8px' }}>Tests :</label>
+                      <label style={{ fontWeight: 600, display: 'block', marginBottom: '8px' }}>
+                        Tests : {execResult.test_results.filter(t => t.passed).length} / {execResult.test_results.length} réussis
+                      </label>
                       <table className="data-table" style={{ fontSize: '0.85rem' }}>
                         <thead>
-                          <tr><th>#</th><th>Entrée</th><th>Attendu</th><th>Obtenu</th><th>Résultat</th></tr>
+                          <tr><th>#</th><th>Résultat</th></tr>
                         </thead>
                         <tbody>
                           {execResult.test_results.map((t, i) => (
                             <tr key={i}>
-                              <td>{i + 1}</td>
-                              <td><code>{t.input}</code></td>
-                              <td><code>{t.expected}</code></td>
-                              <td><code>{t.actual}</code></td>
-                              <td>{t.passed ? <span className="badge badge-active">✅</span> : <span className="badge badge-inactive">❌</span>}</td>
+                              <td>Test {i + 1}</td>
+                              <td>{t.passed ? <span className="badge badge-active">✅ Réussi</span> : <span className="badge badge-inactive">❌ Échoué</span>}</td>
                             </tr>
                           ))}
                         </tbody>

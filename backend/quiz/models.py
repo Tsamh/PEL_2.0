@@ -2,6 +2,36 @@ from django.db import models
 from django.conf import settings
 
 
+def normalize_text(text):
+    """Normalize text for fuzzy comparison: lowercase, strip, remove accents, collapse spaces."""
+    import unicodedata
+    text = text.strip().lower()
+    text = unicodedata.normalize('NFD', text)
+    text = ''.join(c for c in text if unicodedata.category(c) != 'Mn')
+    text = ' '.join(text.split())
+    return text
+
+
+def fuzzy_match(answer, expected, threshold=0.8):
+    """
+    Check if `answer` matches `expected` with tolerance for:
+    - Case differences
+    - Accent differences
+    - Minor spelling/grammar mistakes
+    - Extra/missing spaces
+    Returns (is_correct: bool, similarity: float)
+    """
+    from difflib import SequenceMatcher
+    norm_answer = normalize_text(answer)
+    norm_expected = normalize_text(expected)
+
+    if norm_answer == norm_expected:
+        return True, 1.0
+
+    similarity = SequenceMatcher(None, norm_answer, norm_expected).ratio()
+    return similarity >= threshold, round(similarity, 2)
+
+
 class Quiz(models.Model):
     titre = models.CharField(max_length=200)
     description = models.TextField(blank=True)
@@ -58,3 +88,39 @@ class Choix(models.Model):
 
     def __str__(self):
         return self.texte[:80]
+
+
+class ResultatQuiz(models.Model):
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='resultats')
+    etudiant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='resultats_quiz')
+    score = models.PositiveIntegerField(default=0)
+    score_max = models.PositiveIntegerField(default=0)
+    pourcentage = models.FloatField(default=0)
+    duree_secondes = models.PositiveIntegerField(default=0)
+    date_passage = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Résultat quiz"
+        verbose_name_plural = "Résultats quiz"
+        unique_together = ('quiz', 'etudiant')
+        ordering = ['-date_passage']
+
+    def __str__(self):
+        return f"{self.etudiant} - {self.quiz} ({self.score}/{self.score_max})"
+
+
+class ReponseQuiz(models.Model):
+    resultat = models.ForeignKey(ResultatQuiz, on_delete=models.CASCADE, related_name='reponses')
+    question = models.ForeignKey(Question, on_delete=models.CASCADE)
+    choix_selectionne = models.ForeignKey(Choix, on_delete=models.SET_NULL, null=True, blank=True)
+    texte_reponse = models.TextField(blank=True, default='')
+    est_correct = models.BooleanField(default=False)
+    score_obtenu = models.PositiveIntegerField(default=0)
+    similarite = models.FloatField(default=0, help_text="Score de similarité pour réponses courtes (0-1)")
+
+    class Meta:
+        verbose_name = "Réponse quiz"
+        verbose_name_plural = "Réponses quiz"
+
+    def __str__(self):
+        return f"{self.question} -> {'OK' if self.est_correct else 'KO'}"

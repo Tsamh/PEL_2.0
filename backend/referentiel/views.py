@@ -256,7 +256,12 @@ class FiliereViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role == 'admin' and user.etablissement:
             qs = qs.filter(etablissement=user.etablissement)
-        elif user.role in ('enseignant', 'etudiant') and user.etablissement:
+        elif user.role == 'enseignant':
+            filiere_ids = Classe.objects.filter(
+                affectations_enseignants__enseignant=user
+            ).values_list('filiere_id', flat=True).distinct()
+            qs = qs.filter(id__in=filiere_ids)
+        elif user.role == 'etudiant' and user.etablissement:
             qs = qs.filter(etablissement=user.etablissement)
         return qs
 
@@ -277,6 +282,16 @@ class NiveauViewSet(viewsets.ModelViewSet):
         if self.action in ['create', 'update', 'partial_update', 'destroy']:
             return [IsSuperAdmin()]
         return [permissions.IsAuthenticated()]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        if user.role == 'enseignant':
+            niveau_ids = Classe.objects.filter(
+                affectations_enseignants__enseignant=user
+            ).values_list('niveau_id', flat=True).distinct()
+            qs = qs.filter(id__in=niveau_ids)
+        return qs
 
 
 class UEViewSet(viewsets.ModelViewSet):
@@ -300,9 +315,17 @@ class ECViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
         ue = self.request.query_params.get('ue')
+        classe = self.request.query_params.get('classe')
         if ue:
             qs = qs.filter(ue_id=ue)
+        if user.role == 'enseignant':
+            em_qs = EnseignantMatiere.objects.filter(enseignant=user)
+            if classe:
+                em_qs = em_qs.filter(classe_id=classe)
+            ec_ids = em_qs.values_list('ec_id', flat=True)
+            qs = qs.filter(id__in=ec_ids)
         return qs
 
 
@@ -331,12 +354,16 @@ class ClasseViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        user = self.request.user
         annee = self.request.query_params.get('annee_academique')
         filiere = self.request.query_params.get('filiere')
         if annee:
             qs = qs.filter(annee_academique_id=annee)
         if filiere:
             qs = qs.filter(filiere_id=filiere)
+        if user.role == 'enseignant':
+            classe_ids = AffectationEnseignant.objects.filter(enseignant=user).values_list('classe_id', flat=True)
+            qs = qs.filter(id__in=classe_ids)
         return qs
 
 
