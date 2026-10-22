@@ -4,34 +4,71 @@ import os
 import time
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from django.utils import timezone
+
+from accounts.permissions import (
+    IsEtudiant, RolePermission, CREATEURS, TOUS_LES_ROLES, ENSEIGNANT, ETUDIANT,
+)
+from accounts.scoping import (
+    EtablissementScopedMixin, classes_du_perimetre, classes_enseignant, filieres_etudiant,
+    q_evaluation_etablissement, verifier_filiere_du_perimetre,
+)
+from audit.services import log as audit_log
+from quiz.views import etablissement_evaluation
 from .models import Devoir, SoumissionDevoir, NoteMatiere
 from .serializers import DevoirSerializer, DevoirSerializerPublic, SoumissionDevoirSerializer, NoteMatiereSerializer
 
+CORRECTEURS = RolePermission(read=CREATEURS, write=CREATEURS)
 
-class DevoirViewSet(viewsets.ModelViewSet):
+
+def devoirs_visibles_etudiant(user):
+    return Devoir.objects.filter(est_publie=True, filiere_id__in=filieres_etudiant(user))
+
+
+class DevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Devoir.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par').all()
     serializer_class = DevoirSerializer
+    permission_classes = [RolePermission(read=TOUS_LES_ROLES, write=CREATEURS)]
 
     def get_serializer_class(self):
-        if self.request.user.role == 'etudiant':
+        if self.request.user.role == ETUDIANT:
             return DevoirSerializerPublic
         return DevoirSerializer
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        user = self.request.user
-        if user.role in ('admin', 'responsable_formation') and user.etablissement:
-            qs = qs.filter(filiere__etablissement=user.etablissement)
-        elif user.role == 'enseignant':
-            qs = qs.filter(cree_par=user)
-        elif user.role == 'etudiant':
-            qs = qs.filter(est_publie=True)
-        return qs
+    def gestion_scope(self, qs, user):
+        return qs.filter(q_evaluation_etablissement(user.etablissement_id))
 
-    def perform_create(self, serializer):
-        serializer.save(cree_par=self.request.user)
+    def enseignant_scope(self, qs, user):
+        return qs.filter(cree_par=user)
+
+    def etudiant_scope(self, qs, user):
+        return qs.filter(pk__in=devoirs_visibles_etudiant(user))
+
+    def perform_create(self, serializer, **kwargs):
+        verifier_filiere_du_perimetre(self.request.user, serializer.validated_data.get('filiere'))
+        instance = super().perform_create(serializer, cree_par=self.request.user, **kwargs)
+        if instance.est_publie:
+            self._journaliser('publication_evaluation', instance)
+        return instance
+
+    def perform_update(self, serializer, **kwargs):
+        if 'filiere' in serializer.validated_data:
+            verifier_filiere_du_perimetre(self.request.user, serializer.validated_data['filiere'])
+        etait_publie = serializer.instance.est_publie
+        instance = super().perform_update(serializer, **kwargs)
+        if instance.est_publie and not etait_publie:
+            self._journaliser('publication_evaluation', instance)
+        return instance
+
+    def perform_destroy(self, instance):
+        self._journaliser('suppression_evaluation', instance)
+        instance.delete()
+
+    def _journaliser(self, action_audit, instance):
+        audit_log(self.request, action_audit, cible=instance, etablissement=etablissement_evaluation(instance),
+                  details={'type': 'devoir', 'titre': instance.titre})
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def execute(self, request, pk=None):
@@ -66,33 +103,38 @@ class DevoirViewSet(viewsets.ModelViewSet):
         return Response(result)
 
 
-class SoumissionDevoirViewSet(viewsets.ModelViewSet):
+class SoumissionDevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = SoumissionDevoir.objects.select_related('devoir', 'etudiant').all()
     serializer_class = SoumissionDevoirSerializer
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        user = self.request.user
-        if user.role == 'etudiant':
-            qs = qs.filter(etudiant=user)
-        elif user.role == 'enseignant':
-            qs = qs.filter(devoir__cree_par=user)
-        elif user.role in ('admin', 'responsable_formation') and user.etablissement:
-            qs = qs.filter(devoir__filiere__etablissement=user.etablissement)
-        return qs
+    def get_permissions(self):
+        if self.action == 'create':
+            return [IsEtudiant()]
+        if self.action in ('update', 'partial_update', 'destroy', 'corriger'):
+            return [CORRECTEURS()]
+        return super().get_permissions()
 
-    def perform_create(self, serializer):
+    def gestion_scope(self, qs, user):
+        return qs.filter(q_evaluation_etablissement(user.etablissement_id, prefix='devoir__'))
+
+    def enseignant_scope(self, qs, user):
+        return qs.filter(devoir__cree_par=user)
+
+    def etudiant_scope(self, qs, user):
+        return qs.filter(etudiant=user)
+
+    def perform_create(self, serializer, **kwargs):
         devoir = serializer.validated_data['devoir']
+        if not devoirs_visibles_etudiant(self.request.user).filter(pk=devoir.pk).exists():
+            raise ValidationError({'detail': "Devoir introuvable."})
         if devoir.date_fin and timezone.now() > devoir.date_fin:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError("Le délai de soumission pour ce devoir est dépassé.")
-        serializer.save(etudiant=self.request.user)
+        return super().perform_create(serializer, etudiant=self.request.user, **kwargs)
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    @action(detail=True, methods=['post'])
     def corriger(self, request, pk=None):
         soumission = self.get_object()
-        if request.user.role not in ('admin', 'responsable_formation', 'enseignant'):
-            return Response({"error": "Non autorisé"}, status=status.HTTP_403_FORBIDDEN)
+        avant = soumission.score
         score = request.data.get('score')
         commentaire = request.data.get('commentaire', '')
         if score is not None:
@@ -100,6 +142,12 @@ class SoumissionDevoirViewSet(viewsets.ModelViewSet):
         soumission.commentaire = commentaire
         soumission.statut = 'corrige'
         soumission.save()
+        if soumission.score != avant:
+            audit_log(
+                request, 'saisie_note' if avant is None else 'modification_note', cible=soumission,
+                etablissement=etablissement_evaluation(soumission.devoir),
+                details={'type': 'soumission', 'etudiant': soumission.etudiant_id, 'avant': avant, 'apres': soumission.score},
+            )
         return Response(SoumissionDevoirSerializer(soumission).data)
 
 
@@ -241,27 +289,46 @@ try {{
         return ""
 
 
-class NoteMatiereViewSet(viewsets.ModelViewSet):
+class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = NoteMatiere.objects.select_related('etudiant', 'ec', 'classe', 'annee_academique').all()
     serializer_class = NoteMatiereSerializer
+    permission_classes = [RolePermission(read=TOUS_LES_ROLES, write=CREATEURS)]
+    scope_path = 'ec__ue__filiere__etablissement'
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        user = self.request.user
-        if user.role == 'etudiant':
-            qs = qs.filter(etudiant=user)
-        elif user.role == 'enseignant':
-            from referentiel.models import AffectationEnseignant
-            classe_ids = AffectationEnseignant.objects.filter(enseignant=user).values_list('classe_id', flat=True)
-            qs = qs.filter(classe_id__in=classe_ids)
-        elif user.role in ('admin', 'responsable_formation') and user.etablissement:
-            qs = qs.filter(ec__ue__filiere__etablissement=user.etablissement)
-        return qs
+    def enseignant_scope(self, qs, user):
+        return qs.filter(classe__in=classes_enseignant(user))
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def etudiant_scope(self, qs, user):
+        return qs.filter(etudiant=user)
+
+    def perform_create(self, serializer, **kwargs):
+        instance = super().perform_create(serializer, **kwargs)
+        self._journaliser_note(instance, None)
+        return instance
+
+    def perform_update(self, serializer, **kwargs):
+        avant = self._valeurs(serializer.instance)
+        instance = super().perform_update(serializer, **kwargs)
+        self._journaliser_note(instance, avant)
+        return instance
+
+    @staticmethod
+    def _valeurs(note):
+        return {'note_devoir': note.note_devoir, 'note_examen': note.note_examen}
+
+    def _journaliser_note(self, note, avant):
+        apres = self._valeurs(note)
+        if avant == apres:
+            return
+        audit_log(
+            self.request, 'saisie_note' if avant is None else 'modification_note', cible=note,
+            etablissement=note.classe.filiere.etablissement,
+            details={'type': 'note_matiere', 'etudiant': note.etudiant_id, 'avant': avant, 'apres': apres},
+        )
+
+    @action(detail=False, methods=['post'], permission_classes=[CORRECTEURS])
     def bulk_update(self, request):
-        if request.user.role not in ('admin', 'responsable_formation', 'enseignant'):
-            return Response({"error": "Non autorisé"}, status=status.HTTP_403_FORBIDDEN)
+        from referentiel.models import EC, EnseignantMatiere, Inscription
 
         ec_id = request.data.get('ec')
         classe_id = request.data.get('classe')
@@ -271,35 +338,51 @@ class NoteMatiereViewSet(viewsets.ModelViewSet):
         if not all([ec_id, classe_id, annee_id]):
             return Response({"error": "ec, classe et annee_academique requis"}, status=status.HTTP_400_BAD_REQUEST)
 
-        created = 0
-        updated = 0
+        user = request.user
+        classe = classes_du_perimetre(user).filter(pk=classe_id).first()
+        if classe is None:
+            return Response({"error": "Classe introuvable."}, status=status.HTTP_404_NOT_FOUND)
+        if user.role == ENSEIGNANT:
+            ec_autorisee = EnseignantMatiere.objects.filter(enseignant=user, classe=classe, ec_id=ec_id).exists()
+        else:
+            ec_autorisee = EC.objects.filter(pk=ec_id, ue__filiere__etablissement_id=classe.filiere.etablissement_id).exists()
+        if not ec_autorisee:
+            return Response({"error": "Matière introuvable pour cette classe."}, status=status.HTTP_404_NOT_FOUND)
+
+        inscrits = set(Inscription.objects.filter(classe=classe).values_list('etudiant_id', flat=True))
+        created = updated = ignores = 0
         for entry in notes_data:
             etudiant_id = entry.get('etudiant')
-            note_devoir = entry.get('note_devoir')
-            note_examen = entry.get('note_examen')
-
+            if etudiant_id not in inscrits:
+                ignores += 1
+                continue
+            existante = NoteMatiere.objects.filter(
+                etudiant_id=etudiant_id, ec_id=ec_id, classe=classe, annee_academique_id=annee_id,
+            ).first()
+            avant = self._valeurs(existante) if existante else None
             obj, is_created = NoteMatiere.objects.update_or_create(
                 etudiant_id=etudiant_id,
                 ec_id=ec_id,
-                classe_id=classe_id,
+                classe=classe,
                 annee_academique_id=annee_id,
                 defaults={
-                    'note_devoir': note_devoir,
-                    'note_examen': note_examen,
+                    'note_devoir': entry.get('note_devoir'),
+                    'note_examen': entry.get('note_examen'),
                 }
             )
+            self._journaliser_note(obj, avant)
             if is_created:
                 created += 1
             else:
                 updated += 1
 
-        return Response({"message": f"{created} créée(s), {updated} mise(s) à jour", "created": created, "updated": updated})
+        return Response({
+            "message": f"{created} créée(s), {updated} mise(s) à jour",
+            "created": created, "updated": updated, "ignores": ignores,
+        })
 
-    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    @action(detail=False, methods=['get'], permission_classes=[IsEtudiant])
     def mes_notes(self, request):
-        if request.user.role != 'etudiant':
-            return Response({"error": "Réservé aux étudiants"}, status=status.HTTP_403_FORBIDDEN)
-
         from django.db.models import Avg, F, ExpressionWrapper, FloatField
 
         notes = NoteMatiere.objects.filter(etudiant=request.user).select_related('ec', 'classe', 'annee_academique')

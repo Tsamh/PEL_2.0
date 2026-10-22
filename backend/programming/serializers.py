@@ -13,6 +13,7 @@ class DevoirSerializer(serializers.ModelSerializer):
     class Meta:
         model = Devoir
         fields = '__all__'
+        read_only_fields = ['cree_par']
 
 
 class DevoirSerializerPublic(serializers.ModelSerializer):

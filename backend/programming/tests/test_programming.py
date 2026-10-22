@@ -1,0 +1,129 @@
+import json
+
+from django.test import TestCase
+
+from accounts.testing import build_world, client_for, make_user
+from audit.models import AuditLog
+from programming.models import Devoir, SoumissionDevoir, NoteMatiere
+
+P = '/api/programming'
+
+
+def ids(res):
+    return {o['id'] for o in res.data['results']}
+
+
+class DevoirsTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def test_etudiant_ne_recoit_ni_solution_ni_tests(self):
+        a = self.w.a
+        for url in (f'{P}/devoirs/', f'{P}/devoirs/{a.devoir.id}/'):
+            with self.subTest(url=url):
+                contenu = json.dumps(client_for(a.etu).get(url).data)
+                self.assertNotIn('solution', contenu)
+                self.assertNotIn('test_cases', contenu)
+
+    def test_etudiant_limite_a_ses_filieres(self):
+        a, b = self.w.a, self.w.b
+        self.assertEqual(ids(client_for(a.etu).get(f'{P}/devoirs/')), {a.devoir.id})
+        self.assertEqual(client_for(a.etu).get(f'{P}/devoirs/{b.devoir.id}/').status_code, 404)
+
+    def test_ecriture(self):
+        a, b = self.w.a, self.w.b
+        self.assertEqual(client_for(a.etu).post(f'{P}/devoirs/', {'titre': 'X'}, format='json').status_code, 403)
+        res = client_for(a.ens).post(f'{P}/devoirs/', {'titre': 'Piège', 'filiere': b.filiere.id}, format='json')
+        self.assertEqual(res.status_code, 400)
+        res = client_for(a.resp).post(f'{P}/devoirs/', {'titre': 'TP', 'filiere': a.filiere.id, 'cree_par': b.ens.id}, format='json')
+        self.assertEqual(res.status_code, 201)
+        self.assertEqual(Devoir.objects.get(titre='TP').cree_par, a.resp)
+
+    def test_suppression_journalisee(self):
+        a = self.w.a
+        self.assertEqual(client_for(a.ens).delete(f'{P}/devoirs/{a.devoir.id}/').status_code, 204)
+        self.assertTrue(AuditLog.objects.filter(action='suppression_evaluation', details__type='devoir').exists())
+
+
+class SoumissionsTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def test_etudiant_soumet_sur_un_devoir_visible(self):
+        a, b = self.w.a, self.w.b
+        client = client_for(a.etu)
+        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': a.devoir.id, 'code_soumis': 'print(4)'}, format='json').status_code, 201)
+        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': b.devoir.id, 'code_soumis': 'x'}, format='json').status_code, 400)
+
+    def test_seul_l_etudiant_soumet(self):
+        a = self.w.a
+        res = client_for(a.ens).post(f'{P}/soumissions/', {'devoir': a.devoir.id, 'code_soumis': 'x'}, format='json')
+        self.assertEqual(res.status_code, 403)
+
+    def test_correction(self):
+        a, b = self.w.a, self.w.b
+        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='print(4)')
+        url = f'{P}/soumissions/{soumission.id}/corriger/'
+        self.assertEqual(client_for(a.etu).post(url, {'score': 20}, format='json').status_code, 403)
+        self.assertEqual(client_for(b.ens).post(url, {'score': 20}, format='json').status_code, 404)
+        self.assertEqual(client_for(a.ens).post(url, {'score': 12}, format='json').status_code, 200)
+        saisie = AuditLog.objects.get(action='saisie_note')
+        self.assertEqual(saisie.details['apres'], 12)
+        self.assertEqual(client_for(a.admin).post(url, {'score': 15}, format='json').status_code, 200)
+        modif = AuditLog.objects.get(action='modification_note')
+        self.assertEqual((modif.details['avant'], modif.details['apres']), (12, 15))
+
+    def test_etudiant_ne_modifie_pas_sa_soumission(self):
+        a = self.w.a
+        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        res = client_for(a.etu).patch(f'{P}/soumissions/{soumission.id}/', {'code_soumis': 'y'}, format='json')
+        self.assertEqual(res.status_code, 403)
+
+
+class NotesTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def bulk(self, user, classe, ec, notes):
+        return client_for(user).post(f'{P}/notes/bulk_update/', {
+            'ec': ec.id, 'classe': classe.id, 'annee_academique': classe.annee_academique_id, 'notes': notes,
+        }, format='json')
+
+    def test_enseignant_saisit_puis_modifie(self):
+        a = self.w.a
+        res = self.bulk(a.ens, a.classe, a.ec, [{'etudiant': a.etu.id, 'note_devoir': 12, 'note_examen': 14}])
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(AuditLog.objects.filter(action='saisie_note', cible_id=str(NoteMatiere.objects.get().id)).exists())
+        self.bulk(a.ens, a.classe, a.ec, [{'etudiant': a.etu.id, 'note_devoir': 12, 'note_examen': 14}])
+        self.assertFalse(AuditLog.objects.filter(action='modification_note').exists())
+        self.bulk(a.ens, a.classe, a.ec, [{'etudiant': a.etu.id, 'note_devoir': 13, 'note_examen': 14}])
+        modif = AuditLog.objects.get(action='modification_note')
+        self.assertEqual(modif.details['avant']['note_devoir'], 12)
+        self.assertEqual(modif.details['apres']['note_devoir'], 13)
+
+    def test_classe_hors_perimetre(self):
+        a, b = self.w.a, self.w.b
+        self.assertEqual(self.bulk(a.ens, b.classe, b.ec, [{'etudiant': b.etu.id, 'note_devoir': 1}]).status_code, 404)
+        self.assertEqual(self.bulk(a.admin, b.classe, b.ec, [{'etudiant': b.etu.id, 'note_devoir': 1}]).status_code, 404)
+        self.assertFalse(NoteMatiere.objects.exists())
+
+    def test_ec_non_enseignee_refusee(self):
+        a, b = self.w.a, self.w.b
+        self.assertEqual(self.bulk(a.ens, a.classe, b.ec, [{'etudiant': a.etu.id, 'note_devoir': 1}]).status_code, 404)
+
+    def test_etudiant_non_inscrit_ignore(self):
+        a = self.w.a
+        intrus = make_user('etuIntrus', 'etudiant', a.etab)
+        res = self.bulk(a.ens, a.classe, a.ec, [{'etudiant': intrus.id, 'note_devoir': 20}])
+        self.assertEqual(res.data['ignores'], 1)
+        self.assertFalse(NoteMatiere.objects.filter(etudiant=intrus).exists())
+
+    def test_droits_etudiant(self):
+        a = self.w.a
+        self.assertEqual(self.bulk(a.etu, a.classe, a.ec, []).status_code, 403)
+        self.assertEqual(client_for(a.etu).post(f'{P}/notes/', {}, format='json').status_code, 403)
+        self.assertEqual(client_for(a.etu).get(f'{P}/notes/mes_notes/').status_code, 200)
+        self.assertEqual(client_for(a.ens).get(f'{P}/notes/mes_notes/').status_code, 403)
