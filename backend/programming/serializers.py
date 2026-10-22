@@ -39,6 +39,11 @@ class SoumissionDevoirSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'etudiant', 'statut', 'score', 'commentaire', 'date_soumission']
 
 
+class SoumissionDevoirUpdateSerializer(SoumissionDevoirSerializer):
+    class Meta(SoumissionDevoirSerializer.Meta):
+        read_only_fields = SoumissionDevoirSerializer.Meta.read_only_fields + ['devoir', 'code_soumis']
+
+
 class NoteMatiereSerializer(serializers.ModelSerializer):
     etudiant_nom = serializers.CharField(source='etudiant.get_full_name', read_only=True)
     ec_libelle = serializers.CharField(source='ec.libelle', read_only=True)
@@ -50,6 +55,18 @@ class NoteMatiereSerializer(serializers.ModelSerializer):
         fields = ['id', 'etudiant', 'etudiant_nom', 'ec', 'ec_libelle', 'classe', 'classe_libelle',
                   'annee_academique', 'annee_libelle', 'note_devoir', 'note_examen', 'moyenne', 'date_modification']
         read_only_fields = ['id', 'moyenne', 'date_modification']
+
+    @staticmethod
+    def _borne(valeur):
+        if valeur is not None and not 0 <= valeur <= 20:
+            raise serializers.ValidationError("Une note doit être vide ou comprise entre 0 et 20.")
+        return valeur
+
+    def validate_note_devoir(self, valeur):
+        return self._borne(valeur)
+
+    def validate_note_examen(self, valeur):
+        return self._borne(valeur)
 
 
 class NoteMatiereBulkSerializer(serializers.Serializer):

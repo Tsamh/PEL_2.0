@@ -20,7 +20,7 @@ from accounts.scoping import (
 from audit.services import log as audit_log
 from quiz.views import etablissement_evaluation
 from .models import Devoir, SoumissionDevoir, NoteMatiere
-from .serializers import DevoirSerializer, DevoirSerializerPublic, SoumissionDevoirSerializer, NoteMatiereSerializer
+from .serializers import DevoirSerializer, DevoirSerializerPublic, SoumissionDevoirSerializer, SoumissionDevoirUpdateSerializer, NoteMatiereSerializer
 
 CORRECTEURS = RolePermission(read=CREATEURS, write=CREATEURS)
 
@@ -126,6 +126,20 @@ class SoumissionDevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def etudiant_scope(self, qs, user):
         return qs.filter(etudiant=user)
+
+    def get_serializer_class(self):
+        if self.action in ('update', 'partial_update'):
+            return SoumissionDevoirUpdateSerializer
+        return SoumissionDevoirSerializer
+
+    def perform_destroy(self, instance):
+        audit_log(
+            self.request, 'modification_note', cible=instance,
+            etablissement=etablissement_evaluation(instance.devoir),
+            details={'type': 'soumission', 'etudiant': instance.etudiant_id,
+                     'avant': {'score': instance.score}, 'apres': None},
+        )
+        instance.delete()
 
     def perform_create(self, serializer, **kwargs):
         devoir = serializer.validated_data['devoir']
@@ -364,6 +378,15 @@ class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         instance = super().perform_update(serializer, **kwargs)
         self._journaliser_note(instance, avant)
         return instance
+
+    def perform_destroy(self, instance):
+        audit_log(
+            self.request, 'modification_note', cible=instance,
+            etablissement=instance.classe.filiere.etablissement,
+            details={'type': 'note_matiere', 'etudiant': instance.etudiant_id,
+                     'avant': self._valeurs(instance), 'apres': None},
+        )
+        instance.delete()
 
     @staticmethod
     def _valeurs(note):

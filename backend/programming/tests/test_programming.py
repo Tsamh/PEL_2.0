@@ -225,3 +225,53 @@ class ControlesNotesTests(TestCase):
         res = self.bulk(a, [{'etudiant': str(a.etu.id), 'note_devoir': 10}])
         self.assertEqual(res.status_code, 200)
         self.assertEqual(NoteMatiere.objects.count(), 1)
+
+
+class AuditEtValidationNotesTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def test_suppression_note_journalisee(self):
+        a = self.w.a
+        note = NoteMatiere.objects.create(etudiant=a.etu, ec=a.ec, classe=a.classe, annee_academique=a.annee,
+                                          note_devoir=5, note_examen=7)
+        self.assertEqual(client_for(a.ens).delete(f'{P}/notes/{note.id}/').status_code, 204)
+        log = AuditLog.objects.get(action='modification_note')
+        self.assertEqual(log.details['type'], 'note_matiere')
+        self.assertEqual(log.details['etudiant'], a.etu.id)
+        self.assertEqual(log.details['avant'], {'note_devoir': 5, 'note_examen': 7})
+        self.assertIsNone(log.details['apres'])
+        self.assertEqual(log.etablissement, a.etab)
+
+    def test_suppression_soumission_journalisee(self):
+        a = self.w.a
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x', score=8)
+        self.assertEqual(client_for(a.ens).delete(f'{P}/soumissions/{s.id}/').status_code, 204)
+        log = AuditLog.objects.get(action='modification_note')
+        self.assertEqual(log.details['type'], 'soumission')
+        self.assertEqual(log.details['avant'], {'score': 8})
+        self.assertIsNone(log.details['apres'])
+        self.assertEqual(log.etablissement, a.etab)
+
+    def test_correcteur_ne_modifie_ni_code_ni_devoir(self):
+        a = self.w.a
+        autre = Devoir.objects.create(titre='Autre', filiere=a.filiere, cree_par=a.ens, est_publie=True)
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='original')
+        res = client_for(a.ens).patch(f'{P}/soumissions/{s.id}/',
+                                      {'code_soumis': 'falsifie', 'devoir': autre.id}, format='json')
+        self.assertIn(res.status_code, (200, 400))
+        s.refresh_from_db()
+        self.assertEqual(s.code_soumis, 'original')
+        self.assertEqual(s.devoir_id, a.devoir.id)
+
+    def test_note_directe_hors_bornes(self):
+        a = self.w.a
+        corps = {'etudiant': a.etu.id, 'ec': a.ec.id, 'classe': a.classe.id, 'annee_academique': a.annee.id}
+        for champ in ('note_devoir', 'note_examen'):
+            for valeur in (21, -1):
+                res = client_for(a.ens).post(f'{P}/notes/', {**corps, champ: valeur}, format='json')
+                self.assertEqual(res.status_code, 400, (champ, valeur))
+        self.assertFalse(NoteMatiere.objects.exists())
+        res = client_for(a.ens).post(f'{P}/notes/', {**corps, 'note_devoir': None, 'note_examen': 20}, format='json')
+        self.assertEqual(res.status_code, 201, res.content)
