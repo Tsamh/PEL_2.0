@@ -53,12 +53,12 @@ def _reponse_garde_dernier_admin(cible):
 
 
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all()
+    queryset = User.objects.order_by('id')
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        qs = User.objects.select_related('etablissement')
+        qs = User.objects.select_related('etablissement').order_by('id')
         if user.role == SUPERADMIN:
             pass
         elif user.role in (ADMIN, RESPONSABLE) and user.etablissement_id:

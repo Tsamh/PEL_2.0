@@ -36,15 +36,15 @@ LECTURE_TOUS_ECRITURE_GESTION = RolePermission(read=TOUS_LES_ROLES, write=GESTIO
 
 
 class EtablissementViewSet(viewsets.ModelViewSet):
-    queryset = Etablissement.objects.all()
+    queryset = Etablissement.objects.order_by('id')
     serializer_class = EtablissementSerializer
     permission_classes = [RolePermission(read=GESTION, write=(SUPERADMIN,))]
 
     def get_queryset(self):
         user = self.request.user
         if user.role == SUPERADMIN:
-            return Etablissement.objects.all()
-        return Etablissement.objects.filter(pk=user.etablissement_id)
+            return Etablissement.objects.order_by('id')
+        return Etablissement.objects.filter(pk=user.etablissement_id).order_by('id')
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -267,7 +267,7 @@ class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class FiliereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Filiere.objects.select_related('etablissement').all()
+    queryset = Filiere.objects.select_related('etablissement').order_by('id')
     serializer_class = FiliereSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'etablissement'
@@ -281,7 +281,7 @@ class FiliereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class NiveauViewSet(viewsets.ModelViewSet):
-    queryset = Niveau.objects.all()
+    queryset = Niveau.objects.order_by('id')
     serializer_class = NiveauSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -302,7 +302,7 @@ class NiveauViewSet(viewsets.ModelViewSet):
 
 
 class UEViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = UE.objects.select_related('filiere', 'niveau').prefetch_related('ecs').all()
+    queryset = UE.objects.select_related('filiere', 'niveau').prefetch_related('ecs').order_by('id')
     serializer_class = UESerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'filiere__etablissement'
@@ -326,7 +326,7 @@ class UEViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class ECViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = EC.objects.select_related('ue').all()
+    queryset = EC.objects.select_related('ue').order_by('id')
     serializer_class = ECSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'ue__filiere__etablissement'
@@ -350,7 +350,7 @@ class ECViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Cours.objects.select_related('ec', 'ec__ue', 'ec__ue__filiere').all()
+    queryset = Cours.objects.select_related('ec', 'ec__ue', 'ec__ue__filiere').order_by('id')
     serializer_class = CoursSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'ec__ue__filiere__etablissement'
@@ -367,7 +367,7 @@ class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes').all()
+    queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes').order_by('id')
     serializer_class = ClasseSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'filiere__etablissement'
@@ -398,7 +398,7 @@ class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Groupe.objects.select_related('classe').all()
+    queryset = Groupe.objects.select_related('classe').order_by('id')
     serializer_class = GroupeSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'classe__filiere__etablissement'
@@ -411,7 +411,7 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class InscriptionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Inscription.objects.select_related('etudiant', 'classe').all()
+    queryset = Inscription.objects.select_related('etudiant', 'classe').order_by('id')
     serializer_class = InscriptionSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'classe__filiere__etablissement'
@@ -445,7 +445,7 @@ class InscriptionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class EnseignantMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = EnseignantMatiere.objects.select_related('enseignant', 'ec', 'classe').all()
+    queryset = EnseignantMatiere.objects.select_related('enseignant', 'ec', 'classe').order_by('id')
     serializer_class = EnseignantMatiereSerializer
     permission_classes = [RolePermission(read=CREATEURS, write=GESTION)]
     scope_path = 'classe__filiere__etablissement'
