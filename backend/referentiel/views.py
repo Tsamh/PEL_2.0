@@ -5,9 +5,19 @@ from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 
+from accounts.permissions import (
+    IsSuperAdmin, IsGestionnaire, RolePermission,
+    GESTION, CREATEURS, TOUS_LES_ROLES, SUPERADMIN, ENSEIGNANT, ETUDIANT,
+)
+from accounts.scoping import (
+    EtablissementScopedMixin, classes_enseignant, classes_etudiant,
+    q_filiere_niveau_etudiant, verifier_compte_du_perimetre, MESSAGE_HORS_PERIMETRE,
+)
+from audit.services import log as audit_log
 from .models import (
     Etablissement, AnneeAcademique, Filiere, Niveau, UE, EC, Cours,
     Classe, Groupe, Inscription, EnseignantMatiere, AffectationEnseignant
@@ -22,16 +32,19 @@ from .serializers import (
 
 User = get_user_model()
 
-
-class IsSuperAdmin(permissions.BasePermission):
-    def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role == 'superadmin'
+LECTURE_TOUS_ECRITURE_GESTION = RolePermission(read=TOUS_LES_ROLES, write=GESTION)
 
 
 class EtablissementViewSet(viewsets.ModelViewSet):
     queryset = Etablissement.objects.all()
     serializer_class = EtablissementSerializer
-    permission_classes = [IsSuperAdmin]
+    permission_classes = [RolePermission(read=GESTION, write=(SUPERADMIN,))]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == SUPERADMIN:
+            return Etablissement.objects.all()
+        return Etablissement.objects.filter(pk=user.etablissement_id)
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -169,35 +182,28 @@ L'équipe PEL"""
         })
 
 
-class AnneeAcademiqueViewSet(viewsets.ModelViewSet):
+class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = AnneeAcademique.objects.all()
     serializer_class = AnneeAcademiqueSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'etablissement'
+    scope_etablissement_field = 'etablissement'
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        user = self.request.user
-        if user.role == 'admin' and user.etablissement:
-            qs = qs.filter(etablissement=user.etablissement)
-        elif user.role in ('enseignant', 'etudiant') and user.etablissement:
-            qs = qs.filter(etablissement=user.etablissement)
-        return qs
+    def enseignant_scope(self, qs, user):
+        return qs.filter(etablissement_id=user.etablissement_id)
 
-    def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
+    etudiant_scope = enseignant_scope
 
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[IsGestionnaire])
     def create_with_filieres(self, request):
         serializer = CreateAnneeWithFiliereSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        etablissement_id = data.get('annee_etablissement')
-        if not etablissement_id and request.user.role == 'admin' and request.user.etablissement:
-            etablissement_id = request.user.etablissement.id
-
-        etablissement = None
-        if etablissement_id:
-            etablissement = Etablissement.objects.get(id=etablissement_id)
+        if request.user.role == SUPERADMIN:
+            etablissement = Etablissement.objects.filter(pk=data.get('annee_etablissement')).first()
+        else:
+            etablissement = request.user.etablissement
 
         annee = AnneeAcademique.objects.create(
             libelle=data['annee_libelle'],
@@ -209,9 +215,7 @@ class AnneeAcademiqueViewSet(viewsets.ModelViewSet):
 
         filieres_crees = []
         for f_data in data.get('filieres', []):
-            filiere_etab = etablissement if request.user.role == 'admin' else None
-            if request.user.role != 'superadmin' and request.user.etablissement:
-                filiere_etab = request.user.etablissement
+            filiere_etab = etablissement
 
             niveau_code = f_data.get('niveau', '')
             niveau = Niveau.objects.filter(code=niveau_code).first()
@@ -247,30 +251,18 @@ class AnneeAcademiqueViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_201_CREATED)
 
 
-class FiliereViewSet(viewsets.ModelViewSet):
+class FiliereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Filiere.objects.select_related('etablissement').all()
     serializer_class = FiliereSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'etablissement'
+    scope_etablissement_field = 'etablissement'
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        user = self.request.user
-        if user.role == 'admin' and user.etablissement:
-            qs = qs.filter(etablissement=user.etablissement)
-        elif user.role == 'enseignant':
-            filiere_ids = Classe.objects.filter(
-                affectations_enseignants__enseignant=user
-            ).values_list('filiere_id', flat=True).distinct()
-            qs = qs.filter(id__in=filiere_ids)
-        elif user.role == 'etudiant' and user.etablissement:
-            qs = qs.filter(etablissement=user.etablissement)
-        return qs
+    def enseignant_scope(self, qs, user):
+        return qs.filter(id__in=classes_enseignant(user).values_list('filiere_id', flat=True))
 
-    def perform_create(self, serializer):
-        user = self.request.user
-        if user.role == 'admin' and user.etablissement:
-            serializer.save(etablissement=user.etablissement)
-        else:
-            serializer.save()
+    def etudiant_scope(self, qs, user):
+        return qs.filter(etablissement_id=user.etablissement_id)
 
 
 class NiveauViewSet(viewsets.ModelViewSet):
@@ -294,9 +286,11 @@ class NiveauViewSet(viewsets.ModelViewSet):
         return qs
 
 
-class UEViewSet(viewsets.ModelViewSet):
+class UEViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = UE.objects.select_related('filiere', 'niveau').prefetch_related('ecs').all()
     serializer_class = UESerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'filiere__etablissement'
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -308,75 +302,156 @@ class UEViewSet(viewsets.ModelViewSet):
             qs = qs.filter(niveau_id=niveau)
         return qs
 
+    def enseignant_scope(self, qs, user):
+        ue_ids = EnseignantMatiere.objects.filter(enseignant=user).values_list('ec__ue_id', flat=True)
+        return qs.filter(id__in=ue_ids)
 
-class ECViewSet(viewsets.ModelViewSet):
+    def etudiant_scope(self, qs, user):
+        return qs.filter(q_filiere_niveau_etudiant(user))
+
+
+class ECViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = EC.objects.select_related('ue').all()
     serializer_class = ECSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'ue__filiere__etablissement'
 
     def get_queryset(self):
         qs = super().get_queryset()
-        user = self.request.user
         ue = self.request.query_params.get('ue')
-        classe = self.request.query_params.get('classe')
         if ue:
             qs = qs.filter(ue_id=ue)
-        if user.role == 'enseignant':
-            em_qs = EnseignantMatiere.objects.filter(enseignant=user)
-            if classe:
-                em_qs = em_qs.filter(classe_id=classe)
-            ec_ids = em_qs.values_list('ec_id', flat=True)
-            qs = qs.filter(id__in=ec_ids)
         return qs
 
+    def enseignant_scope(self, qs, user):
+        em_qs = EnseignantMatiere.objects.filter(enseignant=user)
+        classe = self.request.query_params.get('classe')
+        if classe:
+            em_qs = em_qs.filter(classe_id=classe)
+        return qs.filter(id__in=em_qs.values_list('ec_id', flat=True))
 
-class CoursViewSet(viewsets.ModelViewSet):
+    def etudiant_scope(self, qs, user):
+        return qs.filter(q_filiere_niveau_etudiant(user, prefix='ue__'))
+
+
+class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Cours.objects.select_related('ec', 'ec__ue', 'ec__ue__filiere').all()
     serializer_class = CoursSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'ec__ue__filiere__etablissement'
 
-    def get_queryset(self):
-        qs = super().get_queryset()
-        user = self.request.user
-        if user.role == 'admin' and user.etablissement:
-            qs = qs.filter(ec__ue__filiere__etablissement=user.etablissement)
-        elif user.role == 'enseignant':
-            classe_ids = AffectationEnseignant.objects.filter(enseignant=user).values_list('classe_id', flat=True)
-            ec_ids = EnseignantMatiere.objects.filter(enseignant=user).values_list('ec_id', flat=True)
-            qs = qs.filter(
-                models.Q(ec_id__in=ec_ids) |
-                models.Q(ec__enseignants__classe_id__in=classe_ids)
-            ).distinct()
-        return qs
+    def enseignant_scope(self, qs, user):
+        classe_ids = AffectationEnseignant.objects.filter(enseignant=user).values_list('classe_id', flat=True)
+        ec_ids = EnseignantMatiere.objects.filter(enseignant=user).values_list('ec_id', flat=True)
+        return qs.filter(
+            models.Q(ec_id__in=ec_ids) | models.Q(ec__enseignants__classe_id__in=classe_ids)
+        ).distinct()
+
+    def etudiant_scope(self, qs, user):
+        return qs.filter(q_filiere_niveau_etudiant(user, prefix='ec__ue__'))
 
 
-class ClasseViewSet(viewsets.ModelViewSet):
+class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes').all()
     serializer_class = ClasseSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'filiere__etablissement'
 
     def get_queryset(self):
         qs = super().get_queryset()
-        user = self.request.user
         annee = self.request.query_params.get('annee_academique')
         filiere = self.request.query_params.get('filiere')
         if annee:
             qs = qs.filter(annee_academique_id=annee)
         if filiere:
             qs = qs.filter(filiere_id=filiere)
-        if user.role == 'enseignant':
-            classe_ids = AffectationEnseignant.objects.filter(enseignant=user).values_list('classe_id', flat=True)
-            qs = qs.filter(id__in=classe_ids)
         return qs
 
+    def enseignant_scope(self, qs, user):
+        return qs.filter(pk__in=classes_enseignant(user))
 
-class GroupeViewSet(viewsets.ModelViewSet):
+    def etudiant_scope(self, qs, user):
+        return qs.filter(pk__in=classes_etudiant(user))
+
+
+class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Groupe.objects.select_related('classe').all()
     serializer_class = GroupeSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'classe__filiere__etablissement'
+
+    def enseignant_scope(self, qs, user):
+        return qs.filter(classe__in=classes_enseignant(user))
+
+    def etudiant_scope(self, qs, user):
+        return qs.filter(classe__in=classes_etudiant(user))
 
 
-class InscriptionViewSet(viewsets.ModelViewSet):
+class InscriptionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Inscription.objects.select_related('etudiant', 'classe').all()
     serializer_class = InscriptionSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'classe__filiere__etablissement'
+
+    def enseignant_scope(self, qs, user):
+        return qs.filter(classe__in=classes_enseignant(user))
+
+    def etudiant_scope(self, qs, user):
+        return qs.filter(etudiant=user)
+
+    def _verifier(self, serializer):
+        etudiant = serializer.validated_data.get('etudiant')
+        if etudiant is not None:
+            verifier_compte_du_perimetre(self.request.user, etudiant, ETUDIANT)
+
+    def perform_create(self, serializer, **kwargs):
+        self._verifier(serializer)
+        instance = super().perform_create(serializer, **kwargs)
+        audit_log(self.request, 'inscription', cible=instance, etablissement=instance.classe.filiere.etablissement,
+                  details={'etudiant': instance.etudiant_id, 'classe': instance.classe_id})
+        return instance
+
+    def perform_update(self, serializer, **kwargs):
+        self._verifier(serializer)
+        return super().perform_update(serializer, **kwargs)
+
+    def perform_destroy(self, instance):
+        audit_log(self.request, 'retrait_affectation', cible=instance, etablissement=instance.classe.filiere.etablissement,
+                  details={'type': 'inscription', 'etudiant': instance.etudiant_id, 'classe': instance.classe_id})
+        instance.delete()
 
 
-class EnseignantMatiereViewSet(viewsets.ModelViewSet):
+class EnseignantMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = EnseignantMatiere.objects.select_related('enseignant', 'ec', 'classe').all()
     serializer_class = EnseignantMatiereSerializer
+    permission_classes = [RolePermission(read=CREATEURS, write=GESTION)]
+    scope_path = 'classe__filiere__etablissement'
+
+    def enseignant_scope(self, qs, user):
+        return qs.filter(enseignant=user)
+
+    def _verifier(self, serializer):
+        data = serializer.validated_data
+        instance = serializer.instance
+        enseignant = data.get('enseignant', getattr(instance, 'enseignant', None))
+        ec = data.get('ec', getattr(instance, 'ec', None))
+        classe = data.get('classe', getattr(instance, 'classe', None))
+        verifier_compte_du_perimetre(self.request.user, enseignant, ENSEIGNANT)
+        if ec.ue.filiere.etablissement_id != classe.filiere.etablissement_id:
+            raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
+
+    def perform_create(self, serializer, **kwargs):
+        self._verifier(serializer)
+        instance = super().perform_create(serializer, **kwargs)
+        audit_log(self.request, 'affectation', cible=instance.enseignant, etablissement=instance.classe.filiere.etablissement,
+                  details={'ec': instance.ec_id, 'classe': instance.classe_id})
+        return instance
+
+    def perform_update(self, serializer, **kwargs):
+        self._verifier(serializer)
+        return super().perform_update(serializer, **kwargs)
+
+    def perform_destroy(self, instance):
+        audit_log(self.request, 'retrait_affectation', cible=instance.enseignant, etablissement=instance.classe.filiere.etablissement,
+                  details={'type': 'enseignant_matiere', 'ec': instance.ec_id, 'classe': instance.classe_id})
+        instance.delete()
