@@ -147,3 +147,32 @@ class InscriptionsAffectationsTests(TestCase):
         res = client.post(f'{R}/enseignants-matieres/', {'enseignant': a.etu.id, 'ec': ec2.id, 'classe': a.classe.id}, format='json')
         self.assertEqual(res.status_code, 400)
         self.assertEqual(EnseignantMatiere.objects.filter(ec=b.ec, classe=a.classe).count(), 0)
+
+
+class InvitationAdminAuditTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def test_creation_etablissement_journalise_l_invitation(self):
+        res = client_for(self.w.superadmin).post(f'{R}/etablissements/', {
+            'code': 'NEW', 'nom': 'Nouvel établissement', 'admin_email': 'nouveau@test.pel',
+            'admin_first_name': 'Nina', 'admin_last_name': 'Admin',
+        }, format='json')
+        self.assertEqual(res.status_code, 201, res.content)
+        from django.contrib.auth import get_user_model
+        admin = get_user_model().objects.get(email='nouveau@test.pel')
+        log = AuditLog.objects.get(action='invitation', cible_id=str(admin.id))
+        self.assertEqual(log.details, {'role': 'admin'})
+
+    def test_invite_admin_journalise_l_invitation(self):
+        from referentiel.models import Etablissement
+        vide = Etablissement.objects.create(code='VIDE', nom='Sans admin')
+        res = client_for(self.w.superadmin).post(f'{R}/etablissements/{vide.id}/invite_admin/', {
+            'admin_email': 'vide@test.pel', 'admin_first_name': 'Vic', 'admin_last_name': 'Vide',
+        }, format='json')
+        self.assertEqual(res.status_code, 200, res.content)
+        from django.contrib.auth import get_user_model
+        admin = get_user_model().objects.get(email='vide@test.pel')
+        log = AuditLog.objects.get(action='invitation', cible_id=str(admin.id))
+        self.assertEqual(log.etablissement, vide)

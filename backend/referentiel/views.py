@@ -93,6 +93,7 @@ class EtablissementViewSet(viewsets.ModelViewSet):
             is_invited=True,
             is_active=True,
         )
+        audit_log(request, 'invitation', cible=admin_user, details={'role': 'admin'})
 
         activation_url = f"{settings.FRONTEND_URL}/activate/{token}"
         subject = f"PEL - Invitation à administrer {etablissement.nom}"
@@ -156,6 +157,7 @@ L'équipe PEL"""
             is_invited=True,
             is_active=True,
         )
+        audit_log(request, 'invitation', cible=admin_user, details={'role': 'admin'})
 
         activation_url = f"{settings.FRONTEND_URL}/activate/{token}"
         subject = f"PEL - Invitation à administrer {etablissement.nom}"
