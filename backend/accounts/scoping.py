@@ -72,6 +72,25 @@ def verifier_filiere_du_perimetre(acteur, filiere):
         raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
 
 
+def verifier_references_evaluation(acteur, data):
+    """Refuse une année ou une matière (EC) hors de l'établissement de l'acteur dans le corps d'une évaluation.
+
+    Le niveau est global : aucun contrôle. Les clés absentes sont tolérées.
+    """
+    if acteur.role == SUPERADMIN:
+        return
+    annee = data.get('annee_academique')
+    if annee is not None and (not acteur.etablissement_id or annee.etablissement_id != acteur.etablissement_id):
+        raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
+    ec = data.get('ec')
+    if ec is not None:
+        from referentiel.models import EnseignantMatiere
+        if not acteur.etablissement_id or ec.ue.filiere.etablissement_id != acteur.etablissement_id:
+            raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
+        if acteur.role == ENSEIGNANT and not EnseignantMatiere.objects.filter(enseignant=acteur, ec=ec).exists():
+            raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
+
+
 class EtablissementScopedMixin:
     """Filtre le queryset selon le rôle et vérifie à l'écriture que l'objet reste dans le périmètre.
 

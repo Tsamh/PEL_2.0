@@ -127,3 +127,101 @@ class NotesTests(TestCase):
         self.assertEqual(client_for(a.etu).post(f'{P}/notes/', {}, format='json').status_code, 403)
         self.assertEqual(client_for(a.etu).get(f'{P}/notes/mes_notes/').status_code, 200)
         self.assertEqual(client_for(a.ens).get(f'{P}/notes/mes_notes/').status_code, 403)
+
+
+class ControlesNotesTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def corps(self, a, **extra):
+        data = {'etudiant': a.etu.id, 'ec': a.ec.id, 'classe': a.classe.id,
+                'annee_academique': a.annee.id, 'note_devoir': 10, 'note_examen': 12}
+        data.update(extra)
+        return data
+
+    def test_post_direct_ec_hors_perimetre(self):
+        a, b = self.w.a, self.w.b
+        res = client_for(a.ens).post(f'{P}/notes/', self.corps(a, ec=b.ec.id), format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(NoteMatiere.objects.exists())
+
+    def test_post_direct_etudiant_non_inscrit(self):
+        a = self.w.a
+        intrus = make_user('etuIntrus2', 'etudiant', a.etab)
+        res = client_for(a.ens).post(f'{P}/notes/', self.corps(a, etudiant=intrus.id), format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(NoteMatiere.objects.exists())
+
+    def test_post_direct_classe_ou_annee_hors_perimetre(self):
+        a, b = self.w.a, self.w.b
+        res = client_for(a.admin).post(f'{P}/notes/', self.corps(a, classe=b.classe.id), format='json')
+        self.assertEqual(res.status_code, 400)
+        res = client_for(a.admin).post(f'{P}/notes/', self.corps(a, annee_academique=b.annee.id), format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(NoteMatiere.objects.exists())
+
+    def test_post_direct_valide(self):
+        a = self.w.a
+        res = client_for(a.ens).post(f'{P}/notes/', self.corps(a), format='json')
+        self.assertEqual(res.status_code, 201)
+        self.assertTrue(AuditLog.objects.filter(action='saisie_note').exists())
+
+    def test_patch_direct_ec_hors_perimetre(self):
+        a, b = self.w.a, self.w.b
+        note = NoteMatiere.objects.create(etudiant=a.etu, ec=a.ec, classe=a.classe, annee_academique=a.annee, note_devoir=5)
+        res = client_for(a.ens).patch(f'{P}/notes/{note.id}/', {'ec': b.ec.id}, format='json')
+        self.assertEqual(res.status_code, 400)
+        note.refresh_from_db()
+        self.assertEqual(note.ec_id, a.ec.id)
+
+    def test_references_devoir_hors_perimetre(self):
+        a, b = self.w.a, self.w.b
+        res = client_for(a.ens).post(f'{P}/devoirs/', {'titre': 'X', 'filiere': a.filiere.id, 'ec': b.ec.id}, format='json')
+        self.assertEqual(res.status_code, 400)
+        res = client_for(a.admin).post(f'{P}/devoirs/', {'titre': 'Y', 'filiere': a.filiere.id, 'annee_academique': b.annee.id}, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(Devoir.objects.filter(titre__in=['X', 'Y']).exists())
+
+    def test_references_quiz_hors_perimetre(self):
+        from quiz.models import Quiz
+        a, b = self.w.a, self.w.b
+        res = client_for(a.admin).post('/api/quiz/quizzes/', {'titre': 'Q', 'filiere': a.filiere.id, 'annee_academique': b.annee.id}, format='json')
+        self.assertEqual(res.status_code, 400, res.content)
+        self.assertFalse(Quiz.objects.filter(titre='Q').exists())
+
+    def test_corriger_score_invalide(self):
+        a = self.w.a
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        url = f'{P}/soumissions/{s.id}/corriger/'
+        for score in ('abc', 25, -1, 1.5):
+            self.assertEqual(client_for(a.ens).post(url, {'score': score}, format='json').status_code, 400, score)
+        s.refresh_from_db()
+        self.assertIsNone(s.score)
+
+    def bulk(self, a, notes, **extra):
+        data = {'ec': a.ec.id, 'classe': a.classe.id, 'annee_academique': a.annee.id, 'notes': notes}
+        data.update(extra)
+        return client_for(a.ens).post(f'{P}/notes/bulk_update/', data, format='json')
+
+    def test_bulk_note_hors_bornes(self):
+        a = self.w.a
+        res = self.bulk(a, [{'etudiant': a.etu.id, 'note_devoir': 10}, {'etudiant': a.etu.id, 'note_examen': 25}])
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(NoteMatiere.objects.exists())
+        self.assertEqual(self.bulk(a, [{'etudiant': a.etu.id, 'note_devoir': 'x'}]).status_code, 400)
+
+    def test_bulk_notes_pas_une_liste(self):
+        a = self.w.a
+        self.assertEqual(self.bulk(a, 'abc').status_code, 400)
+        self.assertEqual(self.bulk(a, ['abc']).status_code, 400)
+
+    def test_bulk_annee_incoherente(self):
+        a, b = self.w.a, self.w.b
+        self.assertEqual(self.bulk(a, [], annee_academique=b.annee.id).status_code, 400)
+
+    def test_bulk_etudiant_chaine_numerique(self):
+        a = self.w.a
+        res = self.bulk(a, [{'etudiant': str(a.etu.id), 'note_devoir': 10}])
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(NoteMatiere.objects.count(), 1)

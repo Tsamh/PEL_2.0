@@ -6,6 +6,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+from django.db import transaction
 from django.utils import timezone
 
 from accounts.permissions import (
@@ -13,7 +14,8 @@ from accounts.permissions import (
 )
 from accounts.scoping import (
     EtablissementScopedMixin, classes_du_perimetre, classes_enseignant, filieres_etudiant,
-    q_evaluation_etablissement, verifier_filiere_du_perimetre,
+    q_evaluation_etablissement, verifier_filiere_du_perimetre, verifier_references_evaluation,
+    MESSAGE_HORS_PERIMETRE,
 )
 from audit.services import log as audit_log
 from quiz.views import etablissement_evaluation
@@ -48,6 +50,7 @@ class DevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer, **kwargs):
         verifier_filiere_du_perimetre(self.request.user, serializer.validated_data.get('filiere'))
+        verifier_references_evaluation(self.request.user, serializer.validated_data)
         instance = super().perform_create(serializer, cree_par=self.request.user, **kwargs)
         if instance.est_publie:
             self._journaliser('publication_evaluation', instance)
@@ -56,6 +59,7 @@ class DevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def perform_update(self, serializer, **kwargs):
         if 'filiere' in serializer.validated_data:
             verifier_filiere_du_perimetre(self.request.user, serializer.validated_data['filiere'])
+        verifier_references_evaluation(self.request.user, serializer.validated_data)
         etait_publie = serializer.instance.est_publie
         instance = super().perform_update(serializer, **kwargs)
         if instance.est_publie and not etait_publie:
@@ -138,7 +142,14 @@ class SoumissionDevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         score = request.data.get('score')
         commentaire = request.data.get('commentaire', '')
         if score is not None:
-            soumission.score = int(score)
+            if isinstance(score, bool) or not isinstance(score, int):
+                if isinstance(score, str) and score.strip().lstrip('-').isdigit():
+                    score = int(score)
+                else:
+                    raise ValidationError({'score': "Le score doit être un entier."})
+            if not 0 <= score <= soumission.devoir.points_max:
+                raise ValidationError({'score': f"Le score doit être compris entre 0 et {soumission.devoir.points_max}."})
+            soumission.score = score
         soumission.commentaire = commentaire
         soumission.statut = 'corrige'
         soumission.save()
@@ -289,6 +300,33 @@ try {{
         return ""
 
 
+def ec_autorisee_pour_classe(user, classe, ec_id):
+    """Matière enseignée par l'enseignant dans la classe, ou matière de l'établissement de la classe pour la gestion."""
+    from referentiel.models import EC, EnseignantMatiere
+    if user.role == ENSEIGNANT:
+        return EnseignantMatiere.objects.filter(enseignant=user, classe=classe, ec_id=ec_id).exists()
+    return EC.objects.filter(pk=ec_id, ue__filiere__etablissement_id=classe.filiere.etablissement_id).exists()
+
+
+def verifier_ecriture_note(user, classe_id, ec_id, etudiant_id, annee_id):
+    """Garde-fous d'une saisie de note directe : ValidationError (400) en cas de violation."""
+    from referentiel.models import Inscription
+    erreur = ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
+    classe = classes_du_perimetre(user).filter(pk=classe_id).first()
+    if classe is None or not ec_autorisee_pour_classe(user, classe, ec_id):
+        raise erreur
+    if not Inscription.objects.filter(classe=classe, etudiant_id=etudiant_id).exists():
+        raise ValidationError({'detail': "Cet étudiant n'est pas inscrit dans cette classe."})
+    if annee_id != classe.annee_academique_id:
+        raise ValidationError({'detail': "L'année académique ne correspond pas à celle de la classe."})
+
+
+def _note_valide(valeur):
+    if valeur is None:
+        return True
+    return isinstance(valeur, (int, float)) and not isinstance(valeur, bool) and 0 <= valeur <= 20
+
+
 class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = NoteMatiere.objects.select_related('etudiant', 'ec', 'classe', 'annee_academique').all()
     serializer_class = NoteMatiereSerializer
@@ -301,12 +339,27 @@ class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def etudiant_scope(self, qs, user):
         return qs.filter(etudiant=user)
 
+    @staticmethod
+    def _verifier_donnees(user, serializer):
+        data, instance = serializer.validated_data, serializer.instance
+
+        def valeur(champ):
+            if champ in data:
+                return data[champ]
+            return getattr(instance, champ) if instance else None
+
+        verifier_ecriture_note(
+            user, valeur('classe').pk, valeur('ec').pk, valeur('etudiant').pk, valeur('annee_academique').pk,
+        )
+
     def perform_create(self, serializer, **kwargs):
+        self._verifier_donnees(self.request.user, serializer)
         instance = super().perform_create(serializer, **kwargs)
         self._journaliser_note(instance, None)
         return instance
 
     def perform_update(self, serializer, **kwargs):
+        self._verifier_donnees(self.request.user, serializer)
         avant = self._valeurs(serializer.instance)
         instance = super().perform_update(serializer, **kwargs)
         self._journaliser_note(instance, avant)
@@ -328,7 +381,7 @@ class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'], permission_classes=[CORRECTEURS])
     def bulk_update(self, request):
-        from referentiel.models import EC, EnseignantMatiere, Inscription
+        from referentiel.models import Inscription
 
         ec_id = request.data.get('ec')
         classe_id = request.data.get('classe')
@@ -342,39 +395,49 @@ class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         classe = classes_du_perimetre(user).filter(pk=classe_id).first()
         if classe is None:
             return Response({"error": "Classe introuvable."}, status=status.HTTP_404_NOT_FOUND)
-        if user.role == ENSEIGNANT:
-            ec_autorisee = EnseignantMatiere.objects.filter(enseignant=user, classe=classe, ec_id=ec_id).exists()
-        else:
-            ec_autorisee = EC.objects.filter(pk=ec_id, ue__filiere__etablissement_id=classe.filiere.etablissement_id).exists()
-        if not ec_autorisee:
+        if not ec_autorisee_pour_classe(user, classe, ec_id):
             return Response({"error": "Matière introuvable pour cette classe."}, status=status.HTTP_404_NOT_FOUND)
+        if str(annee_id) != str(classe.annee_academique_id):
+            raise ValidationError({'detail': "L'année académique ne correspond pas à celle de la classe."})
+
+        if not isinstance(notes_data, list) or not all(isinstance(e, dict) for e in notes_data):
+            raise ValidationError({'notes': "Le champ notes doit être une liste d'objets."})
+        entrees = []
+        for entry in notes_data:
+            for champ in ('note_devoir', 'note_examen'):
+                if not _note_valide(entry.get(champ)):
+                    raise ValidationError({champ: "Une note doit être vide ou comprise entre 0 et 20."})
+            etudiant_id = entry.get('etudiant')
+            if isinstance(etudiant_id, str) and etudiant_id.isdigit():
+                etudiant_id = int(etudiant_id)
+            entrees.append((etudiant_id, entry))
 
         inscrits = set(Inscription.objects.filter(classe=classe).values_list('etudiant_id', flat=True))
         created = updated = ignores = 0
-        for entry in notes_data:
-            etudiant_id = entry.get('etudiant')
-            if etudiant_id not in inscrits:
-                ignores += 1
-                continue
-            existante = NoteMatiere.objects.filter(
-                etudiant_id=etudiant_id, ec_id=ec_id, classe=classe, annee_academique_id=annee_id,
-            ).first()
-            avant = self._valeurs(existante) if existante else None
-            obj, is_created = NoteMatiere.objects.update_or_create(
-                etudiant_id=etudiant_id,
-                ec_id=ec_id,
-                classe=classe,
-                annee_academique_id=annee_id,
-                defaults={
-                    'note_devoir': entry.get('note_devoir'),
-                    'note_examen': entry.get('note_examen'),
-                }
-            )
-            self._journaliser_note(obj, avant)
-            if is_created:
-                created += 1
-            else:
-                updated += 1
+        with transaction.atomic():
+            for etudiant_id, entry in entrees:
+                if etudiant_id not in inscrits:
+                    ignores += 1
+                    continue
+                existante = NoteMatiere.objects.filter(
+                    etudiant_id=etudiant_id, ec_id=ec_id, classe=classe, annee_academique_id=classe.annee_academique_id,
+                ).first()
+                avant = self._valeurs(existante) if existante else None
+                obj, is_created = NoteMatiere.objects.update_or_create(
+                    etudiant_id=etudiant_id,
+                    ec_id=ec_id,
+                    classe=classe,
+                    annee_academique_id=classe.annee_academique_id,
+                    defaults={
+                        'note_devoir': entry.get('note_devoir'),
+                        'note_examen': entry.get('note_examen'),
+                    }
+                )
+                self._journaliser_note(obj, avant)
+                if is_created:
+                    created += 1
+                else:
+                    updated += 1
 
         return Response({
             "message": f"{created} créée(s), {updated} mise(s) à jour",

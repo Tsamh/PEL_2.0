@@ -3,7 +3,7 @@ from rest_framework import viewsets
 from accounts.permissions import RolePermission, CREATEURS, TOUS_LES_ROLES, ETUDIANT
 from accounts.scoping import (
     EtablissementScopedMixin, filieres_etudiant, q_evaluation_etablissement,
-    verifier_filiere_du_perimetre,
+    verifier_filiere_du_perimetre, verifier_references_evaluation,
 )
 from audit.services import log as audit_log
 from .models import Quiz, Question, Choix
@@ -37,6 +37,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer, **kwargs):
         verifier_filiere_du_perimetre(self.request.user, serializer.validated_data.get('filiere'))
+        verifier_references_evaluation(self.request.user, serializer.validated_data)
         instance = super().perform_create(serializer, cree_par=self.request.user, **kwargs)
         if instance.est_publie:
             self._journaliser('publication_evaluation', instance)
@@ -45,6 +46,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def perform_update(self, serializer, **kwargs):
         if 'filiere' in serializer.validated_data:
             verifier_filiere_du_perimetre(self.request.user, serializer.validated_data['filiere'])
+        verifier_references_evaluation(self.request.user, serializer.validated_data)
         etait_publie = serializer.instance.est_publie
         instance = super().perform_update(serializer, **kwargs)
         if instance.est_publie and not etait_publie:
