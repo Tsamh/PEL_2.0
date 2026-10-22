@@ -14,7 +14,7 @@ from accounts.permissions import (
 )
 from accounts.scoping import (
     EtablissementScopedMixin, classes_du_perimetre, classes_enseignant, filieres_etudiant,
-    q_evaluation_etablissement, verifier_filiere_du_perimetre, verifier_references_evaluation,
+    q_evaluation_etablissement, en_entier, verifier_filiere_du_perimetre, verifier_references_evaluation,
     MESSAGE_HORS_PERIMETRE,
 )
 from audit.services import log as audit_log
@@ -156,11 +156,9 @@ class SoumissionDevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         score = request.data.get('score')
         commentaire = request.data.get('commentaire', '')
         if score is not None:
-            if isinstance(score, bool) or not isinstance(score, int):
-                if isinstance(score, str) and score.strip().lstrip('-').isdigit():
-                    score = int(score)
-                else:
-                    raise ValidationError({'score': "Le score doit être un entier."})
+            score = en_entier(score.strip() if isinstance(score, str) else score)
+            if score is None:
+                raise ValidationError({'score': "Le score doit être un entier."})
             if not 0 <= score <= soumission.devoir.points_max:
                 raise ValidationError({'score': f"Le score doit être compris entre 0 et {soumission.devoir.points_max}."})
             soumission.score = score
@@ -413,6 +411,10 @@ class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
         if not all([ec_id, classe_id, annee_id]):
             return Response({"error": "ec, classe et annee_academique requis"}, status=status.HTTP_400_BAD_REQUEST)
+        ec_id, classe_id = en_entier(ec_id), en_entier(classe_id)
+        if ec_id is None or classe_id is None:
+            return Response({"error": "ec et classe doivent être des identifiants numériques."},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         user = request.user
         classe = classes_du_perimetre(user).filter(pk=classe_id).first()
@@ -430,16 +432,16 @@ class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
             for champ in ('note_devoir', 'note_examen'):
                 if not _note_valide(entry.get(champ)):
                     raise ValidationError({champ: "Une note doit être vide ou comprise entre 0 et 20."})
-            etudiant_id = entry.get('etudiant')
-            if isinstance(etudiant_id, str) and etudiant_id.isdigit():
-                etudiant_id = int(etudiant_id)
-            entrees.append((etudiant_id, entry))
+            brut = entry.get('etudiant')
+            if isinstance(brut, (list, dict)):
+                raise ValidationError({'etudiant': "L'identifiant de l'étudiant doit être un entier."})
+            entrees.append((en_entier(brut), entry))
 
         inscrits = set(Inscription.objects.filter(classe=classe).values_list('etudiant_id', flat=True))
         created = updated = ignores = 0
         with transaction.atomic():
             for etudiant_id, entry in entrees:
-                if etudiant_id not in inscrits:
+                if etudiant_id is None or etudiant_id not in inscrits:
                     ignores += 1
                     continue
                 existante = NoteMatiere.objects.filter(

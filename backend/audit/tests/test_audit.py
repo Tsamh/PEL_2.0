@@ -87,3 +87,14 @@ class EndpointTests(TestCase):
 
     def test_lecture_seule(self):
         self.assertEqual(client_for(self.w.superadmin).post('/api/audit/', {}).status_code, 405)
+
+
+class FiltreActeurRobusteTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def test_acteur_non_ascii_ignore(self):
+        for valeur in ('²', '١٢', '٣'):
+            res = client_for(self.w.superadmin).get(f'/api/audit/?acteur={valeur}')
+            self.assertEqual(res.status_code, 200, valeur)

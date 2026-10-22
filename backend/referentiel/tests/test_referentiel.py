@@ -176,3 +176,54 @@ class InvitationAdminAuditTests(TestCase):
         admin = get_user_model().objects.get(email='vide@test.pel')
         log = AuditLog.objects.get(action='invitation', cible_id=str(admin.id))
         self.assertEqual(log.etablissement, vide)
+
+
+class PerimetreEtRobustesseTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def corps_classe(self, **extra):
+        a = self.w.a
+        data = {'code': 'NEWC', 'libelle': 'Nouvelle', 'filiere': a.filiere.id,
+                'niveau': self.w.niveau.id, 'annee_academique': a.annee.id}
+        data.update(extra)
+        return data
+
+    def test_classe_annee_hors_perimetre(self):
+        a, b = self.w.a, self.w.b
+        res = client_for(a.admin).post(f'{R}/classes/', self.corps_classe(annee_academique=b.annee.id), format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(Classe.objects.filter(code='NEWC').exists())
+        res = client_for(a.admin).patch(f'{R}/classes/{a.classe.id}/', {'annee_academique': b.annee.id}, format='json')
+        self.assertEqual(res.status_code, 400)
+        a.classe.refresh_from_db()
+        self.assertEqual(a.classe.annee_academique_id, a.annee.id)
+
+    def test_classe_valide_toujours_acceptee(self):
+        res = client_for(self.w.a.admin).post(f'{R}/classes/', self.corps_classe(), format='json')
+        self.assertEqual(res.status_code, 201, res.content)
+
+    def payload(self, **extra):
+        data = {'annee_libelle': '2030-2031', 'annee_date_debut': '2030-10-01', 'annee_date_fin': '2031-07-31',
+                'filieres': [{'code': 'GL2', 'libelle': 'Génie', 'niveau': 'L1'}]}
+        data.update(extra)
+        return data
+
+    def test_create_with_filieres_superadmin_etablissement_requis(self):
+        client = client_for(self.w.superadmin)
+        url = f'{R}/annees-academiques/create_with_filieres/'
+        self.assertEqual(client.post(url, self.payload(), format='json').status_code, 400)
+        self.assertEqual(client.post(url, self.payload(annee_etablissement=999999), format='json').status_code, 400)
+        self.assertFalse(AnneeAcademique.objects.filter(libelle='2030-2031').exists())
+        res = client.post(url, self.payload(annee_etablissement=self.w.a.etab.id), format='json')
+        self.assertEqual(res.status_code, 201, res.content)
+
+    def test_create_with_filieres_atomique(self):
+        a = self.w.a
+        doublons = [{'code': 'DUP', 'libelle': 'A', 'niveau': 'L1'}, {'code': 'DUP', 'libelle': 'B', 'niveau': 'L1'}]
+        res = client_for(a.resp).post(f'{R}/annees-academiques/create_with_filieres/',
+                                      self.payload(filieres=doublons), format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(AnneeAcademique.objects.filter(libelle='2030-2031').exists())
+        self.assertFalse(Filiere.objects.filter(code='DUP').exists())

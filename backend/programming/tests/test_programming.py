@@ -275,3 +275,40 @@ class AuditEtValidationNotesTests(TestCase):
         self.assertFalse(NoteMatiere.objects.exists())
         res = client_for(a.ens).post(f'{P}/notes/', {**corps, 'note_devoir': None, 'note_examen': 20}, format='json')
         self.assertEqual(res.status_code, 201, res.content)
+
+
+class EntreesNumeriquesTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def bulk(self, a, notes, **extra):
+        data = {'ec': a.ec.id, 'classe': a.classe.id, 'annee_academique': a.annee.id, 'notes': notes}
+        data.update(extra)
+        return client_for(a.ens).post(f'{P}/notes/bulk_update/', data, format='json')
+
+    def test_corriger_score_chiffre_non_ascii(self):
+        a = self.w.a
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        res = client_for(a.ens).post(f'{P}/soumissions/{s.id}/corriger/', {'score': '²'}, format='json')
+        self.assertEqual(res.status_code, 400)
+
+    def test_bulk_ec_ou_classe_non_numerique(self):
+        a = self.w.a
+        self.assertEqual(self.bulk(a, [], ec='abc').status_code, 400)
+        self.assertEqual(self.bulk(a, [], classe='abc').status_code, 400)
+        self.assertEqual(self.bulk(a, [], ec='²').status_code, 400)
+
+    def test_bulk_etudiant_non_scalaire(self):
+        a = self.w.a
+        for valeur in ([1], {'id': 1}):
+            res = self.bulk(a, [{'etudiant': valeur, 'note_devoir': 10}])
+            self.assertEqual(res.status_code, 400, valeur)
+        self.assertFalse(NoteMatiere.objects.exists())
+
+    def test_bulk_etudiant_illisible_ignore(self):
+        a = self.w.a
+        res = self.bulk(a, [{'etudiant': '²', 'note_devoir': 10}, {'etudiant': True, 'note_devoir': 10},
+                            {'etudiant': None, 'note_devoir': 10}])
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['ignores'], 3)

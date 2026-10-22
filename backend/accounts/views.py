@@ -17,7 +17,7 @@ from .permissions import (
     IsSuperAdmin, IsAdmin, IsGestionnaire, CanManageUser, MESSAGE_REFUS,
     peut_gerer_compte, SUPERADMIN, ADMIN, RESPONSABLE, ENSEIGNANT, ETUDIANT,
 )
-from .scoping import classes_enseignant, classes_du_perimetre
+from .scoping import classes_enseignant, classes_du_perimetre, filieres_etudiant
 from .serializers import (
     UserSerializer, UserCreateSerializer, InviteStudentSerializer,
     InviteEnseignantSerializer, InviteResponsableSerializer,
@@ -596,11 +596,15 @@ L'équipe PEL"""
         user = self.get_object()
         if user.role != ENSEIGNANT:
             return Response({"error": "Cet utilisateur n'est pas un enseignant"}, status=status.HTTP_400_BAD_REQUEST)
+        classes = request.data.get('classes', [])
+        if not isinstance(classes, list) or any(isinstance(c, bool) or not isinstance(c, int) for c in classes):
+            return Response({"error": "Le champ classes doit être une liste d'identifiants entiers."},
+                            status=status.HTTP_400_BAD_REQUEST)
         from referentiel.models import AffectationEnseignant, EnseignantMatiere
         perimetre = classes_du_perimetre(request.user)
         AffectationEnseignant.objects.filter(enseignant=user, classe__in=perimetre).delete()
         EnseignantMatiere.objects.filter(enseignant=user, classe__in=perimetre).delete()
-        classes_affectees = self._affecter_classes(user, request.data.get('classes', []))
+        classes_affectees = self._affecter_classes(user, classes)
         audit_log(request, 'affectation', cible=user, details={'classes': classes_affectees})
         return Response({"message": "Classes mises à jour avec succès"})
 
@@ -628,6 +632,9 @@ L'équipe PEL"""
                 return Response({"error": "Précisez l'établissement du responsable."}, status=status.HTTP_400_BAD_REQUEST)
         else:
             etablissement = request.user.etablissement
+            if etablissement is None:
+                return Response({"error": "Votre compte n'est rattaché à aucun établissement."},
+                                status=status.HTTP_400_BAD_REQUEST)
 
         if User.objects.filter(email=data['email']).exists():
             return Response({"error": "Cet email est déjà utilisé"}, status=status.HTTP_400_BAD_REQUEST)
@@ -731,7 +738,7 @@ L'équipe PEL"""
             from programming.models import SoumissionDevoir
             from quiz.models import Quiz
 
-            stats['quiz_disponibles'] = Quiz.objects.filter(est_publie=True).count()
+            stats['quiz_disponibles'] = Quiz.objects.filter(est_publie=True, filiere_id__in=filieres_etudiant(user)).count()
             stats['mes_soumissions'] = SoumissionDevoir.objects.filter(etudiant=user).count()
             stats['soumissions_corrigees'] = SoumissionDevoir.objects.filter(etudiant=user, statut='corrige').count()
             if stats['mes_soumissions'] > 0:

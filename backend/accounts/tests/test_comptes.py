@@ -62,7 +62,8 @@ class ModificationComptesTests(TestCase):
 
     def test_admin_ne_peut_pas_s_auto_promouvoir(self):
         a = self.w.a
-        self.patch(a.admin, a.admin, {'role': 'superadmin'})
+        res = self.patch(a.admin, a.admin, {'role': 'superadmin'})
+        self.assertEqual(res.status_code, 200)
         a.admin.refresh_from_db()
         self.assertEqual(a.admin.role, 'admin')
 

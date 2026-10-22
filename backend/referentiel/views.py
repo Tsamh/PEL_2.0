@@ -1,4 +1,4 @@
-from django.db import models
+from django.db import models, transaction, IntegrityError
 import uuid
 from django.utils import timezone
 from django.core.mail import send_mail
@@ -15,7 +15,7 @@ from accounts.permissions import (
 )
 from accounts.scoping import (
     EtablissementScopedMixin, classes_enseignant, classes_etudiant,
-    q_filiere_niveau_etudiant, verifier_compte_du_perimetre, MESSAGE_HORS_PERIMETRE,
+    q_filiere_niveau_etudiant, verifier_compte_du_perimetre, verifier_references_evaluation, MESSAGE_HORS_PERIMETRE,
 )
 from audit.services import log as audit_log
 from .models import (
@@ -196,17 +196,8 @@ class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     etudiant_scope = enseignant_scope
 
-    @action(detail=False, methods=['post'], permission_classes=[IsGestionnaire])
-    def create_with_filieres(self, request):
-        serializer = CreateAnneeWithFiliereSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
-        if request.user.role == SUPERADMIN:
-            etablissement = Etablissement.objects.filter(pk=data.get('annee_etablissement')).first()
-        else:
-            etablissement = request.user.etablissement
-
+    @staticmethod
+    def _creer_annee_et_filieres(data, etablissement):
         annee = AnneeAcademique.objects.create(
             libelle=data['annee_libelle'],
             date_debut=data['annee_date_debut'],
@@ -246,6 +237,28 @@ class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
                     credits=ue_data.get('credits', 0),
                     coefficient=ue_data.get('coefficient', 1),
                 )
+        return annee, filieres_crees
+
+    @action(detail=False, methods=['post'], permission_classes=[IsGestionnaire])
+    def create_with_filieres(self, request):
+        serializer = CreateAnneeWithFiliereSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        if request.user.role == SUPERADMIN:
+            etablissement = Etablissement.objects.filter(pk=data.get('annee_etablissement')).first()
+            if etablissement is None:
+                return Response({"error": "Précisez un établissement existant pour cette année académique."},
+                                status=status.HTTP_400_BAD_REQUEST)
+        else:
+            etablissement = request.user.etablissement
+
+        try:
+            with transaction.atomic():
+                annee, filieres_crees = self._creer_annee_et_filieres(data, etablissement)
+        except IntegrityError:
+            return Response({"error": "Un code ou un libellé est déjà utilisé : aucune donnée n'a été créée."},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         return Response({
             "message": f"Année académique {annee.libelle} créée avec {len(filieres_crees)} filière(s)",
@@ -374,6 +387,14 @@ class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def etudiant_scope(self, qs, user):
         return qs.filter(pk__in=classes_etudiant(user))
+
+    def perform_create(self, serializer, **kwargs):
+        verifier_references_evaluation(self.request.user, serializer.validated_data)
+        return super().perform_create(serializer, **kwargs)
+
+    def perform_update(self, serializer, **kwargs):
+        verifier_references_evaluation(self.request.user, serializer.validated_data)
+        return super().perform_update(serializer, **kwargs)
 
 
 class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):

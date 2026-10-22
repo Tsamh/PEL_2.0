@@ -2,6 +2,7 @@ from django.utils.dateparse import parse_date
 from rest_framework import viewsets
 
 from accounts.permissions import IsAdmin, SUPERADMIN
+from accounts.scoping import en_entier
 from .models import AuditLog
 from .serializers import AuditLogSerializer
 
@@ -29,8 +30,9 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         params = self.request.query_params
         if params.get('action'):
             qs = qs.filter(action=params['action'])
-        if params.get('acteur', '').isdigit():
-            qs = qs.filter(acteur_id=params['acteur'])
+        acteur = en_entier(params.get('acteur', ''))
+        if acteur is not None:
+            qs = qs.filter(acteur_id=acteur)
         date_debut = _date(params.get('date_debut'))
         if date_debut:
             qs = qs.filter(date__date__gte=date_debut)

@@ -61,6 +61,17 @@ def verifier_compte_du_perimetre(acteur, compte, role):
         raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
 
 
+def en_entier(valeur):
+    """Entier lu depuis une valeur de requête (int ou chaîne de chiffres ASCII), sinon None. Les booléens sont refusés."""
+    if isinstance(valeur, bool):
+        return None
+    if isinstance(valeur, int):
+        return valeur
+    if isinstance(valeur, str) and valeur.isascii() and valeur.isdecimal():
+        return int(valeur)
+    return None
+
+
 def verifier_filiere_du_perimetre(acteur, filiere):
     if filiere is None or acteur.role == SUPERADMIN:
         return
