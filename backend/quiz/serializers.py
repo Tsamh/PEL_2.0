@@ -24,6 +24,20 @@ class QuestionReadSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class ChoixEtudiantSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Choix
+        fields = ['id', 'texte', 'ordre']
+
+
+class QuestionEtudiantSerializer(serializers.ModelSerializer):
+    choix = ChoixEtudiantSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Question
+        fields = ['id', 'texte', 'type_question', 'points', 'ordre', 'choix']
+
+
 class QuizSerializer(serializers.ModelSerializer):
     questions = QuestionCreateSerializer(many=True, required=False)
     cree_par_nom = serializers.CharField(source='cree_par.get_full_name', read_only=True, default='')
@@ -34,6 +48,7 @@ class QuizSerializer(serializers.ModelSerializer):
     class Meta:
         model = Quiz
         fields = '__all__'
+        read_only_fields = ['cree_par']
 
     def create(self, validated_data):
         questions_data = validated_data.pop('questions', [])
@@ -68,3 +83,21 @@ class QuizSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         self.fields['questions'] = QuestionReadSerializer(many=True, read_only=True)
         return super().to_representation(instance)
+
+
+class QuizEtudiantSerializer(serializers.ModelSerializer):
+    """Vue étudiant : jamais de bonne réponse. La publication du corrigé arrive au sous-projet 3."""
+    questions = QuestionEtudiantSerializer(many=True, read_only=True)
+    cree_par_nom = serializers.CharField(source='cree_par.get_full_name', read_only=True, default='')
+    filiere_libelle = serializers.CharField(source='filiere.libelle', read_only=True, default=None)
+    niveau_libelle = serializers.CharField(source='niveau.libelle', read_only=True, default=None)
+    annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True, default=None)
+
+    class Meta:
+        model = Quiz
+        fields = [
+            'id', 'titre', 'description', 'filiere', 'filiere_libelle', 'niveau', 'niveau_libelle',
+            'annee_academique', 'annee_libelle', 'duree_minutes', 'date_debut', 'date_fin',
+            'cree_par_nom', 'questions',
+        ]
+        read_only_fields = fields
