@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     'quiz',
     'programming',
     'reporting',
+    'audit',
 ]
 
 MIDDLEWARE = [
