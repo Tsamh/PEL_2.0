@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 
 export default function Enseignants() {
+  const { user } = useAuth();
+  const estAdmin = ['superadmin', 'admin'].includes(user?.role);
   const [enseignants, setEnseignants] = useState([]);
   const [classes, setClasses] = useState([]);
   const [showInvite, setShowInvite] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editEnseignant, setEditEnseignant] = useState(null);
-  const [editForm, setEditForm] = useState({ first_name: '', last_name: '', email: '', telephone: '', is_active: true, classes: [] });
+  const [editForm, setEditForm] = useState({ first_name: '', last_name: '', email: '', telephone: '', classes: [] });
   const [form, setForm] = useState({ email: '', first_name: '', last_name: '', telephone: '', mot_de_passe: '', classes: [] });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -48,7 +51,6 @@ export default function Enseignants() {
       last_name: enseignant.last_name || '',
       email: enseignant.email || '',
       telephone: enseignant.telephone || '',
-      is_active: enseignant.is_active,
       classes: enseignant.classes_assignees?.map((c) => c.id) || [],
     });
     setShowEdit(true);
@@ -61,7 +63,9 @@ export default function Enseignants() {
     setLoading(true);
     try {
       const { classes: classesIds, ...userFields } = editForm;
-      await api.patch(`/accounts/users/${editEnseignant.id}/`, userFields);
+      if (estAdmin) {
+        await api.patch(`/accounts/users/${editEnseignant.id}/`, userFields);
+      }
       await api.post(`/accounts/users/${editEnseignant.id}/update_classes/`, { classes: classesIds });
       setMessage('Enseignant modifié avec succès');
       setShowEdit(false);
@@ -74,10 +78,16 @@ export default function Enseignants() {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Supprimer cet enseignant ?')) {
-      await api.delete(`/accounts/users/${id}/`);
+  const toggleActif = async (enseignant) => {
+    setError('');
+    setMessage('');
+    const verbe = enseignant.is_active ? 'deactivate' : 'reactivate';
+    try {
+      const res = await api.post(`/accounts/users/${enseignant.id}/${verbe}/`);
+      setMessage(res.data.message);
       fetchEnseignants();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Action impossible');
     }
   };
 
@@ -103,7 +113,7 @@ export default function Enseignants() {
     <div>
       <div className="page-header">
         <h1>Enseignants</h1>
-        <button className="btn btn-primary" onClick={() => setShowInvite(true)}>+ Inviter un enseignant</button>
+        {estAdmin && <button className="btn btn-primary" onClick={() => setShowInvite(true)}>+ Inviter un enseignant</button>}
       </div>
 
       {message && <div className="alert alert-success">{message}</div>}
@@ -135,7 +145,7 @@ export default function Enseignants() {
                         ))}
                       </div>
                     ) : (
-                      <span style={{ color: 'var(--gray-400)' }}>—</span>
+                      <span style={{ color: 'var(--gray-400)' }}>-</span>
                     )}
                   </td>
                   <td>
@@ -149,7 +159,11 @@ export default function Enseignants() {
                   </td>
                   <td>
                     <button className="btn btn-sm btn-primary" style={{ marginRight: '6px' }} onClick={() => openEdit(e)}>Modifier</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(e.id)}>Supprimer</button>
+                    {estAdmin && (
+                      <button className={`btn btn-sm ${e.is_active ? 'btn-danger' : 'btn-primary'}`} onClick={() => toggleActif(e)}>
+                        {e.is_active ? 'Désactiver' : 'Réactiver'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -206,18 +220,6 @@ export default function Enseignants() {
                       </label>
                     ))}
                   </div>
-                </div>
-                <div className="form-group">
-                  <label>Statut</label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={editForm.is_active}
-                      onChange={(e) => setEditForm({...editForm, is_active: e.target.checked})}
-                      style={{ width: 'auto' }}
-                    />
-                    Actif
-                  </label>
                 </div>
               </div>
               <div className="modal-footer">

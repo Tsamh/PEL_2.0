@@ -30,6 +30,9 @@ import QuizDisponibles from './pages/student/QuizDisponibles';
 import MesResultats from './pages/student/MesResultats';
 import MesNotes from './pages/student/MesNotes';
 import Layout from './components/Layout';
+import RoleRoute, { ADMINS, GESTION } from './components/RoleRoute';
+import Responsables from './pages/admin/Responsables';
+import JournalAudit from './pages/admin/JournalAudit';
 import './App.css';
 
 function PrivateRoute({ children }) {
@@ -57,27 +60,29 @@ function App() {
           <Route path="/register-success" element={<PublicRoute><RegisterSuccess /></PublicRoute>} />
           <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
             <Route index element={<Dashboard />} />
-            <Route path="annees-academiques" element={<AnneesAcademiques />} />
-            <Route path="filieres" element={<Filieres />} />
-            <Route path="niveaux" element={<Niveaux />} />
-            <Route path="ues" element={<UEList />} />
-            <Route path="classes" element={<Classes />} />
-            <Route path="etudiants" element={<StudentManagement />} />
-            <Route path="enseignants" element={<Enseignants />} />
-            <Route path="etablissements" element={<Etablissements />} />
-            <Route path="validations" element={<Validations />} />
-            <Route path="quiz" element={<QuizManagement />} />
-            <Route path="devoirs" element={<DevoirManagement />} />
+            <Route path="annees-academiques" element={<RoleRoute roles={GESTION}><AnneesAcademiques /></RoleRoute>} />
+            <Route path="filieres" element={<RoleRoute roles={GESTION}><Filieres /></RoleRoute>} />
+            <Route path="niveaux" element={<RoleRoute roles={GESTION}><Niveaux /></RoleRoute>} />
+            <Route path="ues" element={<RoleRoute roles={GESTION}><UEList /></RoleRoute>} />
+            <Route path="classes" element={<RoleRoute roles={GESTION}><Classes /></RoleRoute>} />
+            <Route path="etudiants" element={<RoleRoute roles={GESTION}><StudentManagement /></RoleRoute>} />
+            <Route path="enseignants" element={<RoleRoute roles={GESTION}><Enseignants /></RoleRoute>} />
+            <Route path="responsables" element={<RoleRoute roles={ADMINS}><Responsables /></RoleRoute>} />
+            <Route path="journal" element={<RoleRoute roles={ADMINS}><JournalAudit /></RoleRoute>} />
+            <Route path="etablissements" element={<RoleRoute roles={['superadmin']}><Etablissements /></RoleRoute>} />
+            <Route path="validations" element={<RoleRoute roles={['superadmin']}><Validations /></RoleRoute>} />
+            <Route path="quiz" element={<RoleRoute roles={GESTION}><QuizManagement /></RoleRoute>} />
+            <Route path="devoirs" element={<RoleRoute roles={GESTION}><DevoirManagement /></RoleRoute>} />
             <Route path="devoirs/:id" element={<DevoirDetail />} />
-            <Route path="devoirs/:id/corrections" element={<Corrections />} />
-            <Route path="mes-cours" element={<MesCours />} />
-            <Route path="mes-quiz" element={<MesQuiz />} />
-            <Route path="mes-devoirs" element={<MesDevoirsRouter />} />
-            <Route path="gestion-notes" element={<GestionNotes />} />
-            <Route path="statistiques" element={<Statistiques />} />
-            <Route path="quiz-disponibles" element={<QuizDisponibles />} />
-            <Route path="mes-notes" element={<MesNotes />} />
-            <Route path="mes-resultats" element={<MesResultats />} />
+            <Route path="devoirs/:id/corrections" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Corrections /></RoleRoute>} />
+            <Route path="mes-cours" element={<RoleRoute roles={['enseignant']}><MesCours /></RoleRoute>} />
+            <Route path="mes-quiz" element={<RoleRoute roles={['enseignant']}><MesQuiz /></RoleRoute>} />
+            <Route path="mes-devoirs" element={<RoleRoute roles={['enseignant', 'etudiant']}><MesDevoirsRouter /></RoleRoute>} />
+            <Route path="gestion-notes" element={<RoleRoute roles={['enseignant']}><GestionNotes /></RoleRoute>} />
+            <Route path="statistiques" element={<RoleRoute roles={['enseignant']}><Statistiques /></RoleRoute>} />
+            <Route path="quiz-disponibles" element={<RoleRoute roles={['etudiant']}><QuizDisponibles /></RoleRoute>} />
+            <Route path="mes-notes" element={<RoleRoute roles={['etudiant']}><MesNotes /></RoleRoute>} />
+            <Route path="mes-resultats" element={<RoleRoute roles={['etudiant']}><MesResultats /></RoleRoute>} />
           </Route>
           <Route path="/changer-mot-de-passe" element={<PrivateRoute><ForceChangePassword /></PrivateRoute>} />
         </Routes>

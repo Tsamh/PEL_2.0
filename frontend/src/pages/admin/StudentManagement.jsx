@@ -1,14 +1,17 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 
 export default function StudentManagement() {
+  const { user } = useAuth();
+  const estAdmin = ['superadmin', 'admin'].includes(user?.role);
   const [students, setStudents] = useState([]);
   const [classes, setClasses] = useState([]);
   const [showInvite, setShowInvite] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editStudent, setEditStudent] = useState(null);
-  const [editForm, setEditForm] = useState({ first_name: '', last_name: '', email: '', matricule: '', is_active: true });
+  const [editForm, setEditForm] = useState({ first_name: '', last_name: '', email: '', matricule: '' });
   const [inviteForm, setInviteForm] = useState({ email: '', first_name: '', last_name: '', matricule: '', classe: '', mot_de_passe: '' });
   const [importFile, setImportFile] = useState(null);
   const [message, setMessage] = useState('');
@@ -80,7 +83,6 @@ export default function StudentManagement() {
       last_name: student.last_name || '',
       email: student.email || '',
       matricule: student.matricule || '',
-      is_active: student.is_active,
     });
     setShowEdit(true);
   };
@@ -103,10 +105,16 @@ export default function StudentManagement() {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Supprimer cet étudiant ?')) {
-      await api.delete(`/accounts/users/${id}/`);
+  const toggleActif = async (student) => {
+    setError('');
+    setMessage('');
+    const verbe = student.is_active ? 'deactivate' : 'reactivate';
+    try {
+      const res = await api.post(`/accounts/users/${student.id}/${verbe}/`);
+      setMessage(res.data.message);
       fetchStudents();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Action impossible');
     }
   };
 
@@ -163,7 +171,11 @@ export default function StudentManagement() {
                 </td>
                 <td>
                   <button className="btn btn-sm btn-primary" style={{ marginRight: '6px' }} onClick={() => openEdit(s)}>Modifier</button>
-                  <button className="btn btn-sm btn-danger" onClick={() => handleDelete(s.id)}>Supprimer</button>
+                  {estAdmin && (
+                    <button className={`btn btn-sm ${s.is_active ? 'btn-danger' : 'btn-primary'}`} onClick={() => toggleActif(s)}>
+                      {s.is_active ? 'Désactiver' : 'Réactiver'}
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
@@ -197,18 +209,6 @@ export default function StudentManagement() {
                 <div className="form-group">
                   <label>Matricule</label>
                   <input value={editForm.matricule} onChange={(e) => setEditForm({...editForm, matricule: e.target.value})} />
-                </div>
-                <div className="form-group">
-                  <label>Statut</label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={editForm.is_active}
-                      onChange={(e) => setEditForm({...editForm, is_active: e.target.checked})}
-                      style={{ width: 'auto' }}
-                    />
-                    Actif
-                  </label>
                 </div>
               </div>
               <div className="modal-footer">
