@@ -6,11 +6,18 @@ from django.utils import timezone
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.conf import settings
+from django.db.models import Q
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 
+from audit.services import log as audit_log
+from .permissions import (
+    IsSuperAdmin, IsAdmin, IsGestionnaire, CanManageUser,
+    SUPERADMIN, ADMIN, RESPONSABLE, ENSEIGNANT, ETUDIANT,
+)
+from .scoping import classes_enseignant
 from .serializers import (
     UserSerializer, UserCreateSerializer, InviteStudentSerializer,
     InviteEnseignantSerializer,
@@ -22,14 +29,17 @@ from .serializers import (
 User = get_user_model()
 
 
-class IsSuperAdmin(permissions.BasePermission):
-    def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role == 'superadmin'
-
-
-class IsAdminOrSuperAdmin(permissions.BasePermission):
-    def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.role in ('superadmin', 'admin')
+def _reponse_garde_dernier_admin(cible):
+    """400 si `cible` est le dernier administrateur actif de son établissement."""
+    if cible.role != ADMIN or not cible.is_active:
+        return None
+    autres = User.objects.filter(role=ADMIN, etablissement_id=cible.etablissement_id, is_active=True).exclude(pk=cible.pk)
+    if autres.exists():
+        return None
+    return Response(
+        {"error": "Impossible : c'est le dernier administrateur actif de l'établissement."},
+        status=status.HTTP_400_BAD_REQUEST,
+    )
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -38,11 +48,31 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.role == 'superadmin':
-            return User.objects.all()
-        elif user.role == 'admin' and user.etablissement:
-            return User.objects.filter(etablissement=user.etablissement)
-        return User.objects.filter(id=user.id)
+        qs = User.objects.select_related('etablissement')
+        if user.role == SUPERADMIN:
+            pass
+        elif user.role in (ADMIN, RESPONSABLE) and user.etablissement_id:
+            if user.role == ADMIN:
+                qs = qs.filter(etablissement_id=user.etablissement_id)
+            else:
+                qs = qs.filter(
+                    Q(pk=user.pk)
+                    | Q(etablissement_id=user.etablissement_id, role__in=(RESPONSABLE, ENSEIGNANT, ETUDIANT))
+                )
+        elif user.role == ENSEIGNANT:
+            qs = qs.filter(
+                Q(pk=user.pk) | Q(role=ETUDIANT, inscriptions__classe__in=classes_enseignant(user))
+            ).distinct()
+        else:
+            qs = qs.filter(pk=user.pk)
+
+        role = self.request.query_params.get('role')
+        classe = self.request.query_params.get('classe')
+        if role:
+            qs = qs.filter(role=role)
+        if classe:
+            qs = qs.filter(inscriptions__classe_id=classe).distinct()
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'create':
@@ -52,29 +82,39 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ['register_admin', 'activate', 'forgot_password', 'reset_password']:
             return [permissions.AllowAny()]
-        if self.action in ['list', 'destroy', 'update', 'partial_update']:
-            return [IsAdminOrSuperAdmin()]
-        if self.action == 'create':
-            return [IsAdminOrSuperAdmin()]
-        if self.action in ['pending_validations', 'validate_admin']:
+        if self.action in ['create', 'destroy', 'pending_validations', 'validate_admin']:
             return [IsSuperAdmin()]
-        return [permissions.IsAuthenticated()]
+        if self.action in ['update', 'partial_update']:
+            return [IsGestionnaire(), CanManageUser()]
+        return super().get_permissions()
+
+    def destroy(self, request, *args, **kwargs):
+        cible = self.get_object()
+        if cible.pk == request.user.pk:
+            return Response({"error": "Vous ne pouvez pas supprimer votre propre compte."}, status=status.HTTP_400_BAD_REQUEST)
+        garde = _reponse_garde_dernier_admin(cible)
+        if garde:
+            return garde
+        if cible.soumissions_devoirs.exists() or cible.resultats_quiz.exists() or cible.notes_matieres.exists():
+            return Response(
+                {"error": "Ce compte a un historique (soumissions, résultats ou notes). Désactivez-le plutôt que de le supprimer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        audit_log(request, 'suppression_compte', cible=cible, details={'email': cible.email, 'role': cible.role})
+        cible.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def me(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
 
-    @action(detail=False, methods=['get'], permission_classes=[IsAdminOrSuperAdmin])
+    @action(detail=False, methods=['get'], permission_classes=[IsGestionnaire])
     def by_role(self, request):
-        role = request.query_params.get('role')
-        qs = self.get_queryset()
-        if role:
-            qs = qs.filter(role=role)
-        serializer = UserSerializer(qs, many=True)
+        serializer = UserSerializer(self.get_queryset(), many=True)
         return Response(serializer.data)
 
-    @action(detail=False, methods=['post'], permission_classes=[IsAdminOrSuperAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[IsGestionnaire])
     def invite_student(self, request):
         serializer = InviteStudentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -162,7 +202,7 @@ L'équipe PEL"""
             "user_id": user.id
         }, status=status.HTTP_201_CREATED)
 
-    @action(detail=False, methods=['post'], permission_classes=[IsAdminOrSuperAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[IsGestionnaire])
     def import_students(self, request):
         serializer = ImportStudentsSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -492,7 +532,7 @@ L'équipe PEL"""
 
         return Response({"message": "Mot de passe changé avec succès"})
 
-    @action(detail=False, methods=['post'], permission_classes=[IsAdminOrSuperAdmin])
+    @action(detail=False, methods=['post'], permission_classes=[IsAdmin])
     def invite_enseignant(self, request):
         serializer = InviteEnseignantSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -545,7 +585,7 @@ L'équipe PEL"""
             "user_id": user.id
         }, status=status.HTTP_201_CREATED)
 
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrSuperAdmin])
+    @action(detail=True, methods=['post'], permission_classes=[IsGestionnaire])
     def update_classes(self, request, pk=None):
         user = self.get_object()
         if user.role != 'enseignant':

@@ -20,7 +20,11 @@ class UserSerializer(serializers.ModelSerializer):
             'date_joined', 'is_active', 'is_validated', 'validation_status',
             'rejection_reason', 'classe_nom', 'classes_assignees'
         ]
-        read_only_fields = ['id', 'date_joined', 'is_invited', 'date_invitation']
+        read_only_fields = [
+            'id', 'date_joined', 'is_invited', 'date_invitation', 'role', 'etablissement',
+            'is_active', 'is_validated', 'validation_status', 'rejection_reason',
+            'must_change_password',
+        ]
 
     def get_classe_nom(self, obj):
         from referentiel.models import Inscription
