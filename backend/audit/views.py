@@ -29,7 +29,7 @@ class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
         params = self.request.query_params
         if params.get('action'):
             qs = qs.filter(action=params['action'])
-        if params.get('acteur'):
+        if params.get('acteur', '').isdigit():
             qs = qs.filter(acteur_id=params['acteur'])
         date_debut = _date(params.get('date_debut'))
         if date_debut:

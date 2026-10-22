@@ -1,5 +1,7 @@
 import logging
 
+from django.db import transaction
+
 from .models import AuditLog
 
 logger = logging.getLogger(__name__)
@@ -24,17 +26,18 @@ def log(request, action, cible=None, details=None, acteur=None, etablissement=No
             etablissement = getattr(cible, 'etablissement', None)
         if etablissement is None and acteur is not None:
             etablissement = acteur.etablissement
-        return AuditLog.objects.create(
-            acteur=acteur,
-            role_acteur=getattr(acteur, 'role', '') or '',
-            etablissement=etablissement,
-            action=action,
-            cible_type=cible._meta.model_name if cible is not None else '',
-            cible_id=str(cible.pk) if cible is not None else '',
-            cible_repr=str(cible)[:255] if cible is not None else '',
-            details=details or {},
-            ip=_ip(request),
-        )
+        with transaction.atomic():
+            return AuditLog.objects.create(
+                acteur=acteur,
+                role_acteur=getattr(acteur, 'role', '') or '',
+                etablissement=etablissement,
+                action=action,
+                cible_type=cible._meta.model_name if cible is not None else '',
+                cible_id=str(cible.pk) if cible is not None else '',
+                cible_repr=str(cible)[:255] if cible is not None else '',
+                details=details or {},
+                ip=_ip(request),
+            )
     except Exception:
         logger.exception("Échec d'écriture du journal d'audit (%s)", action)
         return None

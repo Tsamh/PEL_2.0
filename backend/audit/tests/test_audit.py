@@ -1,5 +1,6 @@
 from unittest import mock
 
+from django.db import IntegrityError, transaction
 from django.test import TestCase, RequestFactory
 
 from accounts.testing import build_world, client_for
@@ -36,6 +37,12 @@ class ServiceTests(TestCase):
     def test_echec_ecriture_ne_leve_pas(self):
         with mock.patch.object(AuditLog.objects, 'create', side_effect=RuntimeError('db')):
             self.assertIsNone(log(requete(self.w.a.admin), 'export'))
+
+    def test_echec_ecriture_dans_transaction_ne_la_casse_pas(self):
+        with transaction.atomic():
+            with mock.patch.object(AuditLog.objects, 'create', side_effect=IntegrityError('db')):
+                self.assertIsNone(log(requete(self.w.a.admin), 'export'))
+            self.assertGreaterEqual(AuditLog.objects.count(), 0)
 
     def test_journal_immuable(self):
         entree = log(requete(self.w.a.admin), 'export')
@@ -76,6 +83,7 @@ class EndpointTests(TestCase):
         self.assertEqual(client.get(f'/api/audit/?acteur={self.w.b.admin.id}').data['count'], 1)
         self.assertEqual(client.get('/api/audit/?date_debut=2000-01-01&date_fin=2999-12-31').data['count'], 3)
         self.assertEqual(client.get('/api/audit/?date_debut=pas-une-date').data['count'], 3)
+        self.assertEqual(client.get('/api/audit/?acteur=abc').data['count'], 3)
 
     def test_lecture_seule(self):
         self.assertEqual(client_for(self.w.superadmin).post('/api/audit/', {}).status_code, 405)
