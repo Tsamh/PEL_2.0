@@ -1,2 +1,8 @@
 venv
 todo
+__pycache__/
+*.pyc
+db.sqlite3
+backend/env/
+node_modules/
+.env
