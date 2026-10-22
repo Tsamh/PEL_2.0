@@ -74,6 +74,14 @@ class InviteEnseignantSerializer(serializers.Serializer):
     classes = serializers.ListField(child=serializers.IntegerField(), required=False, default=list)
 
 
+class InviteResponsableSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    telephone = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    etablissement = serializers.IntegerField(required=False, allow_null=True)
+
+
 class ImportStudentsSerializer(serializers.Serializer):
     file = serializers.FileField()
 

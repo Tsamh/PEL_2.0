@@ -14,19 +14,29 @@ from django.contrib.auth import get_user_model
 
 from audit.services import log as audit_log
 from .permissions import (
-    IsSuperAdmin, IsAdmin, IsGestionnaire, CanManageUser,
-    SUPERADMIN, ADMIN, RESPONSABLE, ENSEIGNANT, ETUDIANT,
+    IsSuperAdmin, IsAdmin, IsGestionnaire, CanManageUser, MESSAGE_REFUS,
+    peut_gerer_compte, SUPERADMIN, ADMIN, RESPONSABLE, ENSEIGNANT, ETUDIANT,
 )
-from .scoping import classes_enseignant
+from .scoping import classes_enseignant, classes_du_perimetre
 from .serializers import (
     UserSerializer, UserCreateSerializer, InviteStudentSerializer,
-    InviteEnseignantSerializer,
+    InviteEnseignantSerializer, InviteResponsableSerializer,
     ImportStudentsSerializer, ActivateAccountSerializer,
     ForgotPasswordSerializer, ResetPasswordSerializer,
     ChangePasswordSerializer, RegisterAdminSerializer, ValidateAdminSerializer
 )
 
 User = get_user_model()
+
+
+def _generer_username(email):
+    base = email.split('@')[0]
+    username = base
+    compteur = 1
+    while User.objects.filter(username=username).exists():
+        username = f"{base}{compteur}"
+        compteur += 1
+    return username
 
 
 def _reponse_garde_dernier_admin(cible):
@@ -123,6 +133,12 @@ class UserViewSet(viewsets.ModelViewSet):
         if User.objects.filter(email=data['email']).exists():
             return Response({"error": "Cet email est déjà utilisé"}, status=status.HTTP_400_BAD_REQUEST)
 
+        classe = None
+        if data.get('classe'):
+            classe = classes_du_perimetre(request.user).filter(id=data['classe']).first()
+            if classe is None:
+                return Response({"error": "Classe introuvable dans votre établissement."}, status=status.HTTP_400_BAD_REQUEST)
+
         token = uuid.uuid4()
         username = data['email'].split('@')[0]
         base_username = username
@@ -152,14 +168,12 @@ class UserViewSet(viewsets.ModelViewSet):
             user.set_password(mot_de_passe)
             user.save()
 
-        classe_id = data.get('classe')
-        if classe_id:
-            from referentiel.models import Classe, Inscription
-            try:
-                classe = Classe.objects.get(id=classe_id)
-                Inscription.objects.create(etudiant=user, classe=classe)
-            except Classe.DoesNotExist:
-                pass
+        audit_log(request, 'invitation', cible=user, details={'role': ETUDIANT})
+        if classe is not None:
+            from referentiel.models import Inscription
+            inscription = Inscription.objects.create(etudiant=user, classe=classe)
+            audit_log(request, 'inscription', cible=inscription, etablissement=user.etablissement,
+                      details={'etudiant': user.id, 'classe': classe.id})
 
         if mot_de_passe:
             subject = "Bienvenue sur PEL - Vos identifiants de connexion"
@@ -198,7 +212,7 @@ L'équipe PEL"""
             pass
 
         return Response({
-            "message": f"Compte créé pour {data['email']}" + (" — l'étudiant peut se connecter dès maintenant" if mot_de_passe else f" — invitation envoyée à {data['email']}"),
+            "message": f"Compte créé pour {data['email']}" + (" : l'étudiant peut se connecter dès maintenant" if mot_de_passe else f" : invitation envoyée à {data['email']}"),
             "user_id": user.id
         }, status=status.HTTP_201_CREATED)
 
@@ -246,7 +260,7 @@ L'équipe PEL"""
                 username = f"{base_username}{counter}"
                 counter += 1
 
-            User.objects.create(
+            nouvel_etudiant = User.objects.create(
                 username=username,
                 email=email,
                 first_name=first_name,
@@ -280,6 +294,7 @@ L'équipe PEL"""
             except Exception:
                 pass
 
+            audit_log(request, 'invitation', cible=nouvel_etudiant, details={'role': ETUDIANT, 'import': True})
             created += 1
 
         return Response({
@@ -481,6 +496,7 @@ L'équipe PEL"""
             except Exception:
                 pass
 
+            audit_log(request, 'validation_admin', cible=user)
             return Response({"message": f"Compte de {user.email} approuvé. Invitation envoyée."})
 
         elif action_type == 'reject':
@@ -506,6 +522,7 @@ L'équipe PEL"""
             except Exception:
                 pass
 
+            audit_log(request, 'rejet_admin', cible=user, details={'motif': rejection_reason})
             return Response({"message": f"Demande de {user.email} rejetée."})
 
         return Response({"error": "Action invalide. Utilisez 'approve' ou 'reject'."}, status=status.HTTP_400_BAD_REQUEST)
@@ -564,49 +581,122 @@ L'équipe PEL"""
             user.set_password(mot_de_passe)
             user.save()
 
-        classes_ids = data.get('classes', [])
-        if classes_ids:
-            from referentiel.models import Classe, AffectationEnseignant, EnseignantMatiere, UE, EC
-            for cid in classes_ids:
-                try:
-                    classe = Classe.objects.get(id=cid)
-                    AffectationEnseignant.objects.create(enseignant=user, classe=classe)
-                    ue_ids = UE.objects.filter(filiere=classe.filiere, niveau=classe.niveau).values_list('id', flat=True)
-                    ec_ids = EC.objects.filter(ue_id__in=ue_ids).values_list('id', flat=True)
-                    for ec_id in ec_ids:
-                        EnseignantMatiere.objects.get_or_create(
-                            enseignant=user, ec_id=ec_id, classe=classe
-                        )
-                except Classe.DoesNotExist:
-                    continue
+        audit_log(request, 'invitation', cible=user, details={'role': ENSEIGNANT})
+        classes_affectees = self._affecter_classes(user, data.get('classes', []))
+        if classes_affectees:
+            audit_log(request, 'affectation', cible=user, details={'classes': classes_affectees})
 
         return Response({
-            "message": f"Enseignant créé : {data['email']}" + (" — connexion directe disponible" if mot_de_passe else " — en attente de configuration du mot de passe"),
+            "message": f"Enseignant créé : {data['email']}" + (" : connexion directe disponible" if mot_de_passe else " : en attente de configuration du mot de passe"),
             "user_id": user.id
         }, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'], permission_classes=[IsGestionnaire])
     def update_classes(self, request, pk=None):
         user = self.get_object()
-        if user.role != 'enseignant':
+        if user.role != ENSEIGNANT:
             return Response({"error": "Cet utilisateur n'est pas un enseignant"}, status=status.HTTP_400_BAD_REQUEST)
-        classes_ids = request.data.get('classes', [])
-        from referentiel.models import Classe, AffectationEnseignant, EnseignantMatiere, UE, EC
-        AffectationEnseignant.objects.filter(enseignant=user).delete()
-        EnseignantMatiere.objects.filter(enseignant=user).delete()
-        for cid in classes_ids:
-            try:
-                classe = Classe.objects.get(id=cid)
-                AffectationEnseignant.objects.create(enseignant=user, classe=classe)
-                ue_ids = UE.objects.filter(filiere=classe.filiere, niveau=classe.niveau).values_list('id', flat=True)
-                ec_ids = EC.objects.filter(ue_id__in=ue_ids).values_list('id', flat=True)
-                for ec_id in ec_ids:
-                    EnseignantMatiere.objects.get_or_create(
-                        enseignant=user, ec_id=ec_id, classe=classe
-                    )
-            except Classe.DoesNotExist:
-                continue
+        from referentiel.models import AffectationEnseignant, EnseignantMatiere
+        perimetre = classes_du_perimetre(request.user)
+        AffectationEnseignant.objects.filter(enseignant=user, classe__in=perimetre).delete()
+        EnseignantMatiere.objects.filter(enseignant=user, classe__in=perimetre).delete()
+        classes_affectees = self._affecter_classes(user, request.data.get('classes', []))
+        audit_log(request, 'affectation', cible=user, details={'classes': classes_affectees})
         return Response({"message": "Classes mises à jour avec succès"})
+
+    def _affecter_classes(self, enseignant, classes_ids):
+        """Affecte l'enseignant aux classes du périmètre de l'appelant et à leurs EC. Renvoie les ids retenus."""
+        from referentiel.models import AffectationEnseignant, EnseignantMatiere, EC
+        retenues = []
+        for classe in classes_du_perimetre(self.request.user).filter(id__in=classes_ids):
+            AffectationEnseignant.objects.get_or_create(enseignant=enseignant, classe=classe)
+            for ec_id in EC.objects.filter(ue__filiere=classe.filiere, ue__niveau=classe.niveau).values_list('id', flat=True):
+                EnseignantMatiere.objects.get_or_create(enseignant=enseignant, ec_id=ec_id, classe=classe)
+            retenues.append(classe.id)
+        return retenues
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdmin])
+    def invite_responsable(self, request):
+        serializer = InviteResponsableSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        if request.user.role == SUPERADMIN:
+            from referentiel.models import Etablissement
+            etablissement = Etablissement.objects.filter(pk=data.get('etablissement')).first()
+            if etablissement is None:
+                return Response({"error": "Précisez l'établissement du responsable."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            etablissement = request.user.etablissement
+
+        if User.objects.filter(email=data['email']).exists():
+            return Response({"error": "Cet email est déjà utilisé"}, status=status.HTTP_400_BAD_REQUEST)
+
+        token = uuid.uuid4()
+        user = User.objects.create(
+            username=_generer_username(data['email']),
+            email=data['email'],
+            first_name=data['first_name'],
+            last_name=data['last_name'],
+            telephone=data.get('telephone', ''),
+            role=RESPONSABLE,
+            etablissement=etablissement,
+            must_change_password=True,
+            invitation_token=token,
+            invited_by=request.user,
+            date_invitation=timezone.now(),
+            is_invited=True,
+            is_active=True,
+        )
+
+        activation_url = f"{settings.FRONTEND_URL}/activate/{token}"
+        message = f"""Bonjour {data['first_name']} {data['last_name']},
+
+Vous avez été nommé(e) responsable de formation pour "{etablissement.nom}" sur la plateforme PEL.
+
+Pour activer votre compte et créer votre mot de passe, cliquez sur le lien ci-dessous :
+{activation_url}
+
+Ce lien est valable pendant 7 jours.
+
+Cordialement,
+L'équipe PEL"""
+        try:
+            send_mail("Bienvenue sur PEL : créez votre mot de passe", message,
+                      settings.DEFAULT_FROM_EMAIL, [data['email']], fail_silently=True)
+        except Exception:
+            pass
+
+        audit_log(request, 'invitation', cible=user, details={'role': RESPONSABLE})
+        return Response({
+            "message": f"Invitation envoyée à {data['email']}",
+            "user_id": user.id,
+        }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
+    def deactivate(self, request, pk=None):
+        cible = self.get_object()
+        if cible.pk == request.user.pk:
+            return Response({"error": "Vous ne pouvez pas désactiver votre propre compte."}, status=status.HTTP_400_BAD_REQUEST)
+        if not peut_gerer_compte(request.user, cible):
+            return Response({"error": MESSAGE_REFUS}, status=status.HTTP_403_FORBIDDEN)
+        garde = _reponse_garde_dernier_admin(cible)
+        if garde:
+            return garde
+        cible.is_active = False
+        cible.save(update_fields=['is_active'])
+        audit_log(request, 'desactivation', cible=cible)
+        return Response({"message": f"Compte {cible.email} désactivé."})
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
+    def reactivate(self, request, pk=None):
+        cible = self.get_object()
+        if not peut_gerer_compte(request.user, cible):
+            return Response({"error": MESSAGE_REFUS}, status=status.HTTP_403_FORBIDDEN)
+        cible.is_active = True
+        cible.save(update_fields=['is_active'])
+        audit_log(request, 'reactivation', cible=cible)
+        return Response({"message": f"Compte {cible.email} réactivé."})
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def dashboard_stats(self, request):
