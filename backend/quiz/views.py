@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import viewsets
 
 from accounts.permissions import RolePermission, CREATEURS, TOUS_LES_ROLES, ETUDIANT
@@ -6,6 +7,7 @@ from accounts.scoping import (
     verifier_filiere_du_perimetre, verifier_references_evaluation,
 )
 from audit.services import log as audit_log
+from .exceptions import verifier_quiz_modifiable
 from .models import Quiz, Question, Choix
 from .serializers import QuizSerializer, QuizEtudiantSerializer, QuestionReadSerializer, ChoixSerializer
 
@@ -73,6 +75,23 @@ class QuestionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def enseignant_scope(self, qs, user):
         return qs.filter(quiz__cree_par=user)
 
+    def perform_create(self, serializer, **kwargs):
+        with transaction.atomic():
+            instance = super().perform_create(serializer, **kwargs)
+            verifier_quiz_modifiable(instance.quiz)
+        return instance
+
+    def perform_update(self, serializer, **kwargs):
+        verifier_quiz_modifiable(serializer.instance.quiz)
+        with transaction.atomic():
+            instance = super().perform_update(serializer, **kwargs)
+            verifier_quiz_modifiable(instance.quiz)
+        return instance
+
+    def perform_destroy(self, instance):
+        verifier_quiz_modifiable(instance.quiz)
+        instance.delete()
+
 
 class ChoixViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Choix.objects.all()
@@ -84,3 +103,20 @@ class ChoixViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def enseignant_scope(self, qs, user):
         return qs.filter(question__quiz__cree_par=user)
+
+    def perform_create(self, serializer, **kwargs):
+        with transaction.atomic():
+            instance = super().perform_create(serializer, **kwargs)
+            verifier_quiz_modifiable(instance.question.quiz)
+        return instance
+
+    def perform_update(self, serializer, **kwargs):
+        verifier_quiz_modifiable(serializer.instance.question.quiz)
+        with transaction.atomic():
+            instance = super().perform_update(serializer, **kwargs)
+            verifier_quiz_modifiable(instance.question.quiz)
+        return instance
+
+    def perform_destroy(self, instance):
+        verifier_quiz_modifiable(instance.question.quiz)
+        instance.delete()
