@@ -105,7 +105,7 @@ class UserViewSet(viewsets.ModelViewSet):
         garde = _reponse_garde_dernier_admin(cible)
         if garde:
             return garde
-        if cible.soumissions_devoirs.exists() or cible.resultats_quiz.exists() or cible.notes_matieres.exists():
+        if cible.soumissions_devoirs.exists() or cible.tentatives_quiz.exists() or cible.notes_matieres.exists():
             return Response(
                 {"error": "Ce compte a un historique (soumissions, résultats ou notes). Désactivez-le plutôt que de le supprimer."},
                 status=status.HTTP_400_BAD_REQUEST,
