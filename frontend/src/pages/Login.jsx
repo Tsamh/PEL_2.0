@@ -12,7 +12,7 @@ export default function Login() {
   const location = useLocation();
   const demandee = location.state?.from;
   // Seuls les chemins internes sont acceptés, pour éviter une redirection vers un autre site.
-  const cible = typeof demandee === 'string' && /^\/(?![\/\\])/.test(demandee) ? demandee : '/';
+  const cible = typeof demandee === 'string' && /^\/(?![/\\])/.test(demandee) ? demandee : '/';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
