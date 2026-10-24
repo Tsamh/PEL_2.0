@@ -28,7 +28,10 @@ def etablissement_evaluation(instance):
 
 
 class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Quiz.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par').all()
+    queryset = (
+        Quiz.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par')
+        .prefetch_related('classes', 'groupes__classe', 'etudiants')
+    )
     serializer_class = QuizSerializer
     permission_classes = [RolePermission(read=TOUS_LES_ROLES, write=CREATEURS)]
 
@@ -65,6 +68,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         instance = super().perform_create(serializer, cree_par=self.request.user, **kwargs)
         if instance.est_publie:
             self._journaliser('publication_evaluation', instance)
+        self._journaliser_affectation(acces.cibles_vides(), instance)
         return instance
 
     def perform_update(self, serializer, **kwargs):
@@ -72,9 +76,11 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
             verifier_filiere_du_perimetre(self.request.user, serializer.validated_data['filiere'])
         verifier_references_evaluation(self.request.user, serializer.validated_data)
         etait_publie = serializer.instance.est_publie
+        avant = acces.cibles(serializer.instance)
         instance = super().perform_update(serializer, **kwargs)
         if instance.est_publie and not etait_publie:
             self._journaliser('publication_evaluation', instance)
+        self._journaliser_affectation(avant, instance)
         return instance
 
     def perform_destroy(self, instance):
@@ -119,6 +125,12 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def _journaliser(self, action, instance):
         audit_log(self.request, action, cible=instance, etablissement=etablissement_evaluation(instance),
                   details={'type': 'quiz', 'titre': instance.titre})
+
+    def _journaliser_affectation(self, avant, instance):
+        details = acces.ecart_cibles(avant, acces.cibles(instance))
+        if details is not None:
+            audit_log(self.request, 'affectation_quiz', cible=instance,
+                      etablissement=etablissement_evaluation(instance), details=details)
 
 
 class QuestionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):

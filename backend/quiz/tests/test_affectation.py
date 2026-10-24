@@ -1,7 +1,10 @@
 from django.test import TestCase
+from django.utils import timezone
 
 from accounts.testing import build_world, client_for, make_user
-from referentiel.models import Classe, Groupe, Inscription
+from audit.models import AuditLog
+from quiz.models import TentativeQuiz
+from referentiel.models import AffectationEnseignant, Classe, EnseignantMatiere, Groupe, Inscription
 
 Q = '/api/quiz/quizzes'
 T = '/api/quiz/tentatives'
@@ -101,3 +104,105 @@ class VisibiliteTests(TestCase):
         self.assertEqual(client_for(self.a.etu).get(url).data['quiz_disponibles'], 0)
         self.quiz.classes.add(self.a.classe)
         self.assertEqual(client_for(self.a.etu).get(url).data['quiz_disponibles'], 1)
+
+
+class EcritureAffectationTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def setUp(self):
+        self.a = self.w.a
+        self.quiz = self.a.quiz
+        self.quiz.classes.clear()
+        self.classe_hors = Classe.objects.create(
+            code='L1Z', libelle='L1 Info Z', filiere=self.a.filiere, niveau=self.w.niveau,
+            annee_academique=self.a.annee,
+        )
+        self.etu_hors = make_user('etuhors', 'etudiant', self.a.etab)
+        Inscription.objects.create(etudiant=self.etu_hors, classe=self.classe_hors)
+        self.groupe = Groupe.objects.create(code='TD1A', libelle='TD 1', classe=self.a.classe)
+        self.groupe_hors = Groupe.objects.create(code='TD1Z', libelle='TD 1 Z', classe=self.classe_hors)
+
+    def patch(self, user, corps):
+        return client_for(user).patch(f'{Q}/{self.quiz.id}/', corps, format='json')
+
+    def test_enseignant_affecte_sa_classe_son_groupe_ses_etudiants(self):
+        res = self.patch(self.a.ens, {
+            'classes': [self.a.classe.id], 'groupes': [self.groupe.id], 'etudiants': [self.a.etu.id],
+        })
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data['classes_detail'], [{'id': self.a.classe.id, 'code': 'L1A', 'libelle': 'L1 Info A'}])
+        self.assertEqual(res.data['groupes_detail'][0]['classe_code'], 'L1A')
+        self.assertEqual(res.data['etudiants_detail'][0]['id'], self.a.etu.id)
+        self.assertEqual(res.data['nb_cibles'], 3)
+
+    def test_enseignant_refuse_hors_perimetre(self):
+        for corps, cle in [
+            ({'classes': [self.classe_hors.id]}, 'classes'),
+            ({'classes': [self.w.b.classe.id]}, 'classes'),
+            ({'groupes': [self.groupe_hors.id]}, 'groupes'),
+            ({'etudiants': [self.etu_hors.id]}, 'etudiants'),
+            ({'etudiants': [self.a.ens.id]}, 'etudiants'),
+        ]:
+            with self.subTest(corps=corps):
+                res = self.patch(self.a.ens, corps)
+                self.assertEqual(res.status_code, 400)
+                self.assertIn(cle, res.data)
+        self.assertFalse(self.quiz.classes.exists())
+
+    def test_gestion_limitee_a_son_etablissement(self):
+        self.assertEqual(self.patch(self.a.admin, {'classes': [self.classe_hors.id]}).status_code, 200)
+        self.assertEqual(self.patch(self.a.resp, {'etudiants': [self.etu_hors.id]}).status_code, 200)
+        res = self.patch(self.a.admin, {'classes': [self.w.b.classe.id]})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('classes', res.data)
+
+    def test_superadmin_sans_limite(self):
+        res = self.patch(self.w.superadmin, {'classes': [self.w.b.classe.id], 'etudiants': [self.w.b.etu.id]})
+        self.assertEqual(res.status_code, 200, res.data)
+
+    def test_affectation_conservee_quand_l_enseignant_perd_la_classe(self):
+        self.quiz.classes.add(self.a.classe)
+        AffectationEnseignant.objects.filter(enseignant=self.a.ens).delete()
+        EnseignantMatiere.objects.filter(enseignant=self.a.ens).delete()
+        self.assertEqual(self.patch(self.a.ens, {'titre': 'Renommé'}).status_code, 200)
+        self.assertEqual(self.patch(self.a.ens, {'classes': [self.a.classe.id]}).status_code, 200)
+        self.assertEqual(list(self.quiz.classes.all()), [self.a.classe])
+        self.assertEqual(self.patch(self.a.ens, {'classes': []}).status_code, 200)
+        self.assertFalse(self.quiz.classes.exists())
+
+    def test_creation_avec_affectation_et_audit(self):
+        res = client_for(self.a.ens).post(f'{Q}/', {'titre': 'Nouveau', 'classes': [self.a.classe.id]}, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        log = AuditLog.objects.get(action='affectation_quiz', cible_id=str(res.data['id']))
+        self.assertEqual(log.details['ajouts']['classes'], [self.a.classe.id])
+        self.assertEqual(log.details['retraits'], {'classes': [], 'groupes': [], 'etudiants': []})
+
+    def test_audit_seulement_si_changement(self):
+        self.patch(self.a.ens, {'classes': [self.a.classe.id]})
+        self.assertEqual(AuditLog.objects.filter(action='affectation_quiz').count(), 1)
+        self.patch(self.a.ens, {'titre': 'Autre titre'})
+        self.patch(self.a.ens, {'classes': [self.a.classe.id]})
+        self.assertEqual(AuditLog.objects.filter(action='affectation_quiz').count(), 1)
+        self.patch(self.a.ens, {'classes': [], 'etudiants': [self.a.etu.id]})
+        log = AuditLog.objects.filter(action='affectation_quiz').order_by('-id').first()
+        self.assertEqual(log.details['retraits']['classes'], [self.a.classe.id])
+        self.assertEqual(log.details['ajouts']['etudiants'], [self.a.etu.id])
+
+    def test_modifiable_apres_une_tentative(self):
+        TentativeQuiz.objects.create(quiz=self.quiz, etudiant=self.a.etu, fin_prevue=timezone.now())
+        self.assertEqual(self.patch(self.a.ens, {'classes': [self.a.classe.id]}).status_code, 200)
+
+    def test_vue_etudiant_sans_cibles_ni_code(self):
+        self.quiz.classes.add(self.a.classe)
+        res = client_for(self.a.etu).get(f'{Q}/{self.quiz.id}/')
+        self.assertEqual(res.status_code, 200)
+        for champ in ('classes', 'groupes', 'etudiants', 'classes_detail', 'etudiants_detail', 'code_acces'):
+            self.assertNotIn(champ, res.data)
+
+    def test_code_acces_en_lecture_seule(self):
+        res = self.patch(self.a.ens, {'code_acces': 'AAAAAA'})
+        self.assertEqual(res.status_code, 200)
+        self.quiz.refresh_from_db()
+        self.assertEqual(self.quiz.code_acces, '')
