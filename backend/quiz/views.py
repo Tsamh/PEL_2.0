@@ -226,17 +226,19 @@ class ReponseViewSet(EtablissementScopedMixin, mixins.ListModelMixin, viewsets.G
     def valider(self, request, pk=None):
         reponse = self.get_object()
         maximum = reponse.question.points
-        score = en_decimal(request.data.get('score'))
+        brut = request.data.get('score') if isinstance(request.data, dict) else None
+        score = en_decimal(brut)
         if score is None or score < 0 or score > maximum:
             raise ValidationError({'detail': f"La note doit être un nombre compris entre 0 et {maximum}."})
         avant = reponse.score_obtenu
         with transaction.atomic():
+            tentative = TentativeQuiz.objects.select_for_update().get(pk=reponse.tentative_id)
             reponse.score_obtenu = arrondir(score)
             reponse.statut_correction = ReponseQuiz.VALIDEE
             reponse.corrige_par = request.user
             reponse.corrige_le = timezone.now()
             reponse.save(update_fields=['score_obtenu', 'statut_correction', 'corrige_par', 'corrige_le'])
-            recalculer_score(reponse.tentative)
-        audit_log(request, 'validation_reponse', cible=reponse.tentative,
+            recalculer_score(tentative)
+        audit_log(request, 'validation_reponse', cible=tentative,
                   details={'question': reponse.question_id, 'avant': str(avant), 'apres': str(reponse.score_obtenu)})
         return Response(self.get_serializer(reponse).data)

@@ -76,6 +76,17 @@ class CorrectionApiTests(TestCase):
         for score in ('-1', '3', 'abc', None, True, '1E+999999', '-1E+999999', 'NaN', 'Infinity', '1e999', [1], {'a': 1}):
             with self.subTest(score=score):
                 self.assertEqual(self.valider(self.w.a.ens, score).status_code, 400)
+        self.reponse.refresh_from_db()
+        self.assertEqual(self.reponse.statut_correction, ReponseQuiz.A_VALIDER)
+        self.assertEqual(self.reponse.score_obtenu, Decimal('2.00'))
+        self.assertFalse(AuditLog.objects.filter(action='validation_reponse').exists())
+
+    def test_corps_non_objet_renvoie_400(self):
+        url = f'{Q}/reponses/{self.reponse.id}/valider/'
+        for corps in ([1], 'abc', 5):
+            with self.subTest(corps=corps):
+                res = client_for(self.w.a.ens).post(url, corps, format='json')
+                self.assertEqual(res.status_code, 400)
 
     def test_valider_exposant_minuscule_ne_plante_pas(self):
         res = self.valider(self.w.a.ens, '1E-999999')
