@@ -64,9 +64,9 @@ class QuestionBanqueSerializer(serializers.ModelSerializer):
     modifiable = serializers.SerializerMethodField()
     contenu = serializers.JSONField(write_only=True, required=False)
     chapitres = serializers.ListField(child=serializers.CharField(max_length=100, allow_blank=True),
-                                      write_only=True, required=False)
+                                      max_length=20, write_only=True, required=False)
     competences = serializers.ListField(child=serializers.CharField(max_length=100, allow_blank=True),
-                                        write_only=True, required=False)
+                                        max_length=20, write_only=True, required=False)
 
     class Meta:
         model = QuestionBanque

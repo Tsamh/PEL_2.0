@@ -158,3 +158,15 @@ class BanqueTests(TestCase):
         self.ens.patch(f'{B}/{p1}/', {'contenu': contenu(texte='Nouvelle formulation')}, format='json')
         self.assertEqual(self.ids('recherche=capitale'), set())
         self.assertEqual(self.ids('tag=x&ec=y&tag=99999999999999999999999'), {p1, p2})
+
+    def test_plafond_des_tags(self):
+        self.assertEqual(self.creer(chapitres=[str(i) for i in range(21)]).status_code, 400)
+        self.assertEqual(self.creer(competences=[str(i) for i in range(21)]).status_code, 400)
+        self.assertEqual(self.creer(chapitres='pas une liste').status_code, 400)
+
+    def test_enseignant_sans_etablissement_ne_voit_pas_le_partage_sans_etablissement(self):
+        orphelin = make_user('orphelin', 'enseignant', None)
+        EnseignantMatiere.objects.create(enseignant=orphelin, ec=self.a.ec, classe=self.a.classe)
+        fiche = QuestionBanque.objects.create(auteur=self.w.superadmin, etablissement=None, ec=self.a.ec, partagee=True)
+        self.assertNotIn(fiche.id, self.ids('', client_for(orphelin)))
+        self.assertEqual(client_for(orphelin).get(f'{B}/{fiche.id}/').status_code, 404)

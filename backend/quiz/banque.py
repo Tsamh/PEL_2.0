@@ -22,6 +22,8 @@ def q_banque_visible(user):
     if user.role == ENSEIGNANT:
         from referentiel.models import EnseignantMatiere
         matieres = EnseignantMatiere.objects.filter(enseignant=user).values('ec_id')
+        if not user.etablissement_id:
+            return Q(auteur=user)
         return Q(auteur=user) | Q(partagee=True, etablissement_id=user.etablissement_id, ec_id__in=matieres)
     return Q(pk__in=[])
 
