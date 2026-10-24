@@ -51,7 +51,10 @@ class QuestionBanqueViewSet(viewsets.ModelViewSet):
         audit_log(self.request, 'creation_question_banque', cible=fiche, details={'numero': 1})
 
     def perform_update(self, serializer):
+        archivee_avant = serializer.instance.archivee
         fiche = serializer.save()
+        if fiche.archivee != archivee_avant:
+            audit_log(self.request, 'archivage_question_banque', cible=fiche, details={'archivee': fiche.archivee})
         if serializer.version_creee is not None:
             audit_log(self.request, 'version_question_banque', cible=fiche,
                       details={'numero': serializer.version_creee.numero})
@@ -71,6 +74,8 @@ class QuestionBanqueViewSet(viewsets.ModelViewSet):
         return Response(self._relire(fiche))
 
     def perform_destroy(self, fiche):
+        if fiche.archivee:
+            return
         fiche.archivee = True
         fiche.save(update_fields=['archivee'])
         audit_log(self.request, 'archivage_question_banque', cible=fiche)

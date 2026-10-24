@@ -33,6 +33,9 @@ class ContenuSerializer(serializers.Serializer):
             raise serializers.ValidationError({'choix': [f"Une question a au plus {NB_CHOIX_MAX} choix."]})
         verifier_coherence_question(attrs)
         verifier_penalite(attrs)
+        if not (attrs['type_question'] == 'qcm' and attrs['mode_notation'] == Question.PAR_CHOIX):
+            for choix in attrs['choix']:
+                choix['points'] = Decimal('0')
         return attrs
 
 
@@ -98,7 +101,7 @@ class QuestionBanqueSerializer(serializers.ModelSerializer):
         return contenu.validated_data
 
     def validate_ec(self, ec):
-        if ec is not None:
+        if ec is not None and (self.instance is None or ec != self.instance.ec):
             verifier_references_evaluation(self.context['request'].user, {'ec': ec})
         return ec
 

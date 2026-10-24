@@ -133,6 +133,32 @@ class BanqueTests(TestCase):
         self.assertEqual(self.ens.patch(f'{B}/{fiche_id}/', {'archivee': False}, format='json').status_code, 200)
         self.assertIn(fiche_id, self.ids(''))
 
+    def test_archivage_audite_par_patch_et_sans_doublon(self):
+        fiche_id = self.creer().data['id']
+        self.ens.patch(f'{B}/{fiche_id}/', {'archivee': True}, format='json')
+        audit = AuditLog.objects.filter(action='archivage_question_banque')
+        self.assertEqual(audit.count(), 1)
+        self.assertEqual(audit.get().details, {'archivee': True})
+        self.assertEqual(self.ens.delete(f'{B}/{fiche_id}/').status_code, 204)
+        self.assertEqual(audit.count(), 1)
+        self.ens.patch(f'{B}/{fiche_id}/', {'archivee': False}, format='json')
+        self.assertEqual(audit.count(), 2)
+
+    def test_points_des_choix_remis_a_zero_hors_qcm_par_choix(self):
+        vf = dict(VF, choix=[{'texte': 'Vrai', 'est_correct': True, 'points': '3'},
+                             {'texte': 'Faux', 'est_correct': False, 'points': '2'}])
+        res = self.creer(contenu=vf)
+        self.assertEqual(res.status_code, 201, res.data)
+        self.assertEqual([c['points'] for c in res.data['version']['choix']], ['0.00', '0.00'])
+
+    def test_modification_avec_meme_ec_apres_perte_de_matiere(self):
+        fiche_id = self.creer().data['id']
+        EnseignantMatiere.objects.filter(enseignant=self.a.ens).delete()
+        res = self.ens.patch(f'{B}/{fiche_id}/', {'ec': self.a.ec.id, 'contenu': contenu(texte='Autre ?')}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        res = self.ens.patch(f'{B}/{fiche_id}/', {'ec': self.autre_ec.id}, format='json')
+        self.assertEqual(res.status_code, 400)
+
     def test_tags_sans_doublon_de_casse(self):
         self.creer(chapitres=['Boucles'])
         self.creer(chapitres=['  boucles ', 'BOUCLES', ''])

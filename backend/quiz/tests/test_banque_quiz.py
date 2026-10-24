@@ -91,3 +91,48 @@ class BanqueEtQuizTests(TestCase):
         question = self.quiz.questions.get()
         self.assertIsNone(question.source)
         self.assertEqual(question.texte, 'Capitale de la France ?')
+
+
+class BanqueEtQuizCorrectionsTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    setUp = BanqueEtQuizTests.setUp
+    enregistrer = BanqueEtQuizTests.enregistrer
+
+    def test_api_questions_ne_ecrit_pas_la_source(self):
+        res = client_for(self.w.b.ens).post(f'{B}/', {'contenu': CONTENU}, format='json')
+        version_b = res.data['version']
+        self.enregistrer([question_depuis(self.fiche['version'], source=None)])
+        question = self.quiz.questions.get()
+        res = self.ens.patch(f'/api/quiz/questions/{question.id}/',
+                             {'source': version_b['id'], 'version_source': 42}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        question.refresh_from_db()
+        self.assertIsNone(question.source_id)
+        self.assertIsNone(question.version_source)
+
+    def test_api_questions_valide_la_penalite(self):
+        self.enregistrer([question_depuis(self.fiche['version'])])
+        question = self.quiz.questions.get()
+        url = f'/api/quiz/questions/{question.id}/'
+        self.assertEqual(self.ens.patch(url, {'penalite': '50'}, format='json').status_code, 400)
+        self.assertEqual(self.ens.patch(url, {'penalite': '1'}, format='json').status_code, 200)
+        self.assertEqual(
+            self.ens.patch(url, {'type_question': 'court', 'penalite': '1'}, format='json').status_code, 400)
+
+    def test_source_devenue_invisible_conservee(self):
+        collegue = make_user('collegue2', 'enseignant', self.a.etab)
+        EnseignantMatiere.objects.create(enseignant=collegue, ec=self.a.ec, classe=self.a.classe)
+        cc = client_for(collegue)
+        res = cc.post(f'{B}/', {'ec': self.a.ec.id, 'partagee': True, 'contenu': CONTENU}, format='json')
+        version = res.data['version']
+        self.assertEqual(self.enregistrer([question_depuis(version)]).status_code, 200)
+        cc.patch(f"{B}/{res.data['id']}/", {'partagee': False}, format='json')
+        res2 = self.enregistrer([question_depuis(version, id=self.quiz.questions.get().id)])
+        self.assertEqual(res2.status_code, 200, res2.data)
+        self.assertEqual(self.quiz.questions.get().source_id, version['id'])
+        # une source invisible jamais utilisee dans ce quiz reste refusee
+        autre = client_for(self.w.b.ens).post(f'{B}/', {'contenu': CONTENU}, format='json')
+        self.assertEqual(self.enregistrer([question_depuis(autre.data['version'])]).status_code, 400)

@@ -82,7 +82,9 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
         source = attrs.get('source')
         if source is not None:
             request = self.context.get('request')
-            if request is not None and not QuestionBanque.objects.filter(
+            quiz = self.root.instance
+            deja_utilisee = isinstance(quiz, Quiz) and quiz.questions.filter(source=source).exists()
+            if request is not None and not deja_utilisee and not QuestionBanque.objects.filter(
                 q_banque_visible(request.user), pk=source.question_id,
             ).exists():
                 raise serializers.ValidationError({'source': ["Cette version de la banque n'est pas disponible."]})
@@ -99,6 +101,15 @@ class QuestionReadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
         fields = '__all__'
+        read_only_fields = ['source', 'version_source']
+
+    def validate(self, attrs):
+        if self.instance is not None:
+            actuel = {k: getattr(self.instance, k) for k in ('type_question', 'mode_notation', 'points', 'penalite')}
+            verifier_penalite({**actuel, **attrs})
+        else:
+            verifier_penalite(attrs)
+        return attrs
 
     def get_fiche_source(self, question):
         return question.source.question_id if question.source_id else None

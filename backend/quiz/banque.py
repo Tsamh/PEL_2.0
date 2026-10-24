@@ -1,7 +1,7 @@
 """Banque de questions : visibilité, contenu versionné, tags et filtres."""
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F, Max, Q
 
 from accounts.permissions import ADMIN, ENSEIGNANT, RESPONSABLE, SUPERADMIN
@@ -92,7 +92,14 @@ def appliquer_tags(fiche, chapitres, competences):
                 etablissement_id=fiche.etablissement_id, type=type_tag, libelle__iexact=libelle,
             ).first()
             if tag is None:
-                tag = TagQuestion.objects.create(etablissement_id=fiche.etablissement_id, type=type_tag, libelle=libelle)
+                try:
+                    with transaction.atomic():
+                        tag = TagQuestion.objects.create(
+                            etablissement_id=fiche.etablissement_id, type=type_tag, libelle=libelle)
+                except IntegrityError:
+                    tag = TagQuestion.objects.filter(
+                        etablissement_id=fiche.etablissement_id, type=type_tag, libelle__iexact=libelle,
+                    ).first()
             tags.append(tag)
     fiche.tags.set(tags)
 
