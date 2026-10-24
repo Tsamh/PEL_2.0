@@ -6,7 +6,11 @@ function CorrigeQuestion({ item, index }) {
     <div className="form-card" style={{ marginBottom: '12px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
         <strong>{index + 1}. {item.texte}</strong>
-        <span>{Number(item.score_obtenu)} / {Number(item.points)}{item.statut_correction === 'a_valider' && ' (à valider)'}</span>
+        <span>
+          {Number(item.score_obtenu)} / {Number(item.points)}
+          {Number(item.score_obtenu) < 0 && ' (pénalité)'}
+          {item.statut_correction === 'a_valider' && ' (à valider)'}
+        </span>
       </div>
       {item.type_question === 'courte' ? (
         <div style={{ marginTop: '8px' }}>
@@ -21,6 +25,11 @@ function CorrigeQuestion({ item, index }) {
             </li>
           ))}
         </ul>
+      )}
+      {item.explication && (
+        <div style={{ marginTop: '8px', padding: '8px 12px', background: 'var(--gray-50, #f9fafb)', borderRadius: '6px' }}>
+          <strong>Explication :</strong> {item.explication}
+        </div>
       )}
     </div>
   );
