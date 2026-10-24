@@ -18,8 +18,10 @@ export default function PasserQuiz() {
   const [error, setError] = useState('');
   const [confirmation, setConfirmation] = useState(false);
   const [soumission, setSoumission] = useState(false);
+  const [nonEnregistrees, setNonEnregistrees] = useState(false);
   const minuteurs = useRef({});
   const enAttente = useRef({});
+  const echecs = useRef({});
   const dernieres = useRef({});
   const chaines = useRef({});
   const nbEnvois = useRef(0);
@@ -56,20 +58,26 @@ export default function PasserQuiz() {
       let ok = true;
       try {
         await api.put(`/quiz/tentatives/${id}/repondre/`, { question: questionId, choix: courante.choix, texte: courante.texte });
-        setError('');
+        delete echecs.current[questionId];
       } catch (err) {
         if (err.response?.status === 409) {
+          echecs.current = {};
           charger();
         } else {
           ok = false;
+          echecs.current[questionId] = true;
           // Conservée pour être renvoyée à la prochaine soumission ou au prochain changement de page.
           if (!(questionId in enAttente.current) && dernieres.current[questionId] === courante) enAttente.current[questionId] = courante;
           setError(messageErreur(err, "La réponse n'a pas pu être enregistrée."));
         }
       }
       nbEnvois.current -= 1;
-      if (!ok) setEtatSauvegarde('erreur');
-      else if (nbEnvois.current === 0) setEtatSauvegarde('enregistre');
+      const echecRestant = Object.keys(echecs.current).length > 0;
+      if (!ok || echecRestant) setEtatSauvegarde('erreur');
+      else if (nbEnvois.current === 0) {
+        setEtatSauvegarde('enregistre');
+        setError('');
+      }
       return ok;
     });
     chaines.current[questionId] = envoi;
@@ -86,9 +94,10 @@ export default function PasserQuiz() {
 
   useEffect(() => {
     charger();
-    window.addEventListener('beforeunload', envoyerEnAttente);
+    const avantFermeture = () => { envoyerEnAttente(); };
+    window.addEventListener('beforeunload', avantFermeture);
     return () => {
-      window.removeEventListener('beforeunload', envoyerEnAttente);
+      window.removeEventListener('beforeunload', avantFermeture);
       envoyerEnAttente();
     };
   }, [charger, envoyerEnAttente]);
@@ -120,6 +129,7 @@ export default function PasserQuiz() {
         setError("Certaines réponses n'ont pas pu être enregistrées. Vérifiez votre connexion puis réessayez.");
         // Une fois le temps écoulé, le serveur clôture la tentative : on tente quand même la soumission.
         if (!tempsEcoule) return;
+        setNonEnregistrees(true);
       }
       const res = await api.post(`/quiz/tentatives/${id}/soumettre/`);
       appliquer(res.data);
@@ -133,6 +143,8 @@ export default function PasserQuiz() {
     }
   }, [id, envoyerEnAttente, appliquer, charger]);
 
+  const surTempsEcoule = useCallback(() => soumettre(true), [soumettre]);
+
   if (error && !tentative) return <div className="alert alert-error">{error}</div>;
   if (!tentative) return <div className="loading">Chargement...</div>;
 
@@ -143,6 +155,7 @@ export default function PasserQuiz() {
           <h1>Résultat</h1>
           <Link className="btn btn-secondary" to="/quiz-disponibles">Retour aux quiz</Link>
         </div>
+        {nonEnregistrees && <div className="alert alert-error">Certaines réponses n'ont pas pu être enregistrées avant la fin du temps.</div>}
         <ResultatTentative tentative={tentative} />
       </div>
     );
@@ -171,7 +184,7 @@ export default function PasserQuiz() {
           <span style={{ fontSize: '0.9rem', color: etatSauvegarde === 'erreur' ? 'var(--danger, #dc2626)' : 'var(--gray-500)' }}>
             {LIBELLES_SAUVEGARDE[etatSauvegarde] || ''}
           </span>
-          <CountdownTimer dateFin={finLocale} onTimeUp={() => soumettre(true)} />
+          <CountdownTimer dateFin={finLocale} onTimeUp={surTempsEcoule} />
         </div>
       </div>
 
