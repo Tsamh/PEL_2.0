@@ -77,6 +77,15 @@ class CodeAccesTests(TestCase):
             with self.subTest(corps=corps):
                 self.assertEqual(self.demarrer(corps).status_code, 400)
 
+    def test_code_avec_substitut_unicode(self):
+        self.generer()
+        corps = b'{"code": "' + bytes([92]) + b'ud800"}'
+        res = self.etu.post(f'{Q}/{self.quiz.id}/demarrer/', corps, content_type='application/json')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('incorrect', json.dumps(res.data, ensure_ascii=False))
+        self.assertEqual(self.etu.post(f'{Q}/{self.quiz.id}/demarrer/', b'{"code": "'+bytes([92])+b'ud800"}',
+                                       content_type='application/json').status_code, 400)
+
     def test_reprise_sans_code(self):
         code = self.generer()
         premiere = self.demarrer({'code': code})

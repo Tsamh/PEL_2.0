@@ -103,9 +103,14 @@ def verifier_code(request, quiz):
     fourni = _normaliser(request.data.get('code') if isinstance(request.data, dict) else None)
     if not fourni:
         raise ValidationError({'detail': "Ce quiz demande un code d'accès."})
-    if hmac.compare_digest(fourni.encode(), quiz.code_acces.encode()):
+    if hmac.compare_digest(fourni.encode('utf-8', 'replace'), quiz.code_acces.encode('utf-8', 'replace')):
         return
     cache.add(cle, 0, timeout=FENETRE_ESSAIS)
-    if cache.incr(cle) == LIMITE_ESSAIS:
+    try:
+        essais = cache.incr(cle)
+    except ValueError:
+        cache.set(cle, 1, FENETRE_ESSAIS)
+        essais = 1
+    if essais == LIMITE_ESSAIS:
         audit_log(request, 'echec_code_acces', cible=quiz, details={'quiz': quiz.pk})
     raise ValidationError({'detail': "Code d'accès incorrect."})
