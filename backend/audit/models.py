@@ -20,6 +20,15 @@ class AuditLog(models.Model):
         ('saisie_note', 'Saisie de note'),
         ('modification_note', 'Modification de note'),
         ('export', 'Export'),
+        ('demarrage_quiz', 'Démarrage de quiz'),
+        ('soumission_quiz', 'Soumission de quiz'),
+        ('validation_reponse', 'Validation de réponse'),
+        ('publication_resultats', 'Publication des résultats'),
+        ('affectation_quiz', 'Affectation de quiz'),
+        ('code_acces_quiz', "Code d'accès de quiz"),
+        ('echec_code_acces', "Essais de code d'accès épuisés"),
+        ('membre_groupe', 'Ajout à un groupe'),
+        ('retrait_membre_groupe', "Retrait d'un groupe"),
     ]
 
     acteur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='actions_auditees')

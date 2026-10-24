@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 export default function Login() {
   const [login, setLogin] = useState('');
@@ -9,6 +9,10 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const { login: authLogin } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const demandee = location.state?.from;
+  // Seuls les chemins internes sont acceptés, pour éviter une redirection vers un autre site.
+  const cible = typeof demandee === 'string' && /^\/(?![/\\])/.test(demandee) ? demandee : '/';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -19,7 +23,7 @@ export default function Login() {
       if (userData.must_change_password) {
         navigate('/changer-mot-de-passe');
       } else {
-        window.location.href = '/';
+        window.location.href = cible;
       }
     } catch (err) {
       const msg = err.response?.data?.non_field_errors?.[0] || 'Identifiants incorrects';

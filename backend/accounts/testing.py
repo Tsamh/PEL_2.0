@@ -59,6 +59,7 @@ def _build_etablissement(suffix, niveau):
         titre=f'Quiz {suffix}', filiere=filiere, niveau=niveau,
         annee_academique=annee, est_publie=True, cree_par=ens,
     )
+    quiz.classes.add(classe)
     question = Question.objects.create(quiz=quiz, texte='2 + 2 ?', type_question='qcm', points=1)
     Choix.objects.create(question=question, texte='4', est_correct=True, ordre=1)
     Choix.objects.create(question=question, texte='5', est_correct=False, ordre=2)

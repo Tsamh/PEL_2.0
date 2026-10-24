@@ -7,11 +7,11 @@ from rest_framework.response import Response
 
 from accounts.permissions import RolePermission, CREATEURS, TOUS_LES_ROLES, ETUDIANT, IsEtudiant
 from accounts.scoping import (
-    EtablissementScopedMixin, en_entier, filieres_etudiant, q_evaluation_etablissement,
+    EtablissementScopedMixin, en_entier, q_evaluation_etablissement,
     verifier_filiere_du_perimetre, verifier_references_evaluation,
 )
 from audit.services import log as audit_log
-from . import passage
+from . import acces, passage
 from .correction import arrondir, en_decimal, recalculer_score
 from .exceptions import Conflit, verifier_quiz_modifiable
 from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz
@@ -28,7 +28,10 @@ def etablissement_evaluation(instance):
 
 
 class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Quiz.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par').all()
+    queryset = (
+        Quiz.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par')
+        .prefetch_related('classes', 'groupes__classe', 'etudiants')
+    )
     serializer_class = QuizSerializer
     permission_classes = [RolePermission(read=TOUS_LES_ROLES, write=CREATEURS)]
 
@@ -44,7 +47,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return qs.filter(cree_par=user)
 
     def etudiant_scope(self, qs, user):
-        return qs.filter(est_publie=True, filiere_id__in=filieres_etudiant(user))
+        return qs.filter(est_publie=True).filter(acces.q_quiz_affecte(user))
 
     def _cloturer_expirees_etudiant(self, request):
         # L'état (tentative en cours, dernière tentative) doit refléter les tentatives expirées.
@@ -65,6 +68,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         instance = super().perform_create(serializer, cree_par=self.request.user, **kwargs)
         if instance.est_publie:
             self._journaliser('publication_evaluation', instance)
+        self._journaliser_affectation(acces.cibles_vides(), instance)
         return instance
 
     def perform_update(self, serializer, **kwargs):
@@ -72,9 +76,11 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
             verifier_filiere_du_perimetre(self.request.user, serializer.validated_data['filiere'])
         verifier_references_evaluation(self.request.user, serializer.validated_data)
         etait_publie = serializer.instance.est_publie
+        avant = acces.cibles(serializer.instance)
         instance = super().perform_update(serializer, **kwargs)
         if instance.est_publie and not etait_publie:
             self._journaliser('publication_evaluation', instance)
+        self._journaliser_affectation(avant, instance)
         return instance
 
     def perform_destroy(self, instance):
@@ -84,6 +90,8 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[IsEtudiant])
     def demarrer(self, request, pk=None):
         quiz = self.get_object()
+        if quiz.code_acces and not passage.reprise_possible(quiz, request.user):
+            acces.verifier_code(request, quiz)
         tentative, creee = passage.demarrer(quiz, request.user)
         if creee:
             audit_log(request, 'demarrage_quiz', cible=tentative, details={'quiz': quiz.titre, 'numero': tentative.numero})
@@ -116,9 +124,30 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         audit_log(request, 'publication_resultats', cible=quiz, details={'titre': quiz.titre})
         return Response({'resultats_publies': True})
 
+    @action(detail=True, methods=['post', 'delete'], permission_classes=[RolePermission(write=CREATEURS)])
+    def code_acces(self, request, pk=None):
+        quiz = self.get_object()
+        if request.method == 'DELETE':
+            quiz.code_acces = ''
+            quiz.save(update_fields=['code_acces'])
+            audit_log(request, 'code_acces_quiz', cible=quiz, etablissement=etablissement_evaluation(quiz),
+                      details={'action': 'retire'})
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        quiz.code_acces = acces.generer_code()
+        quiz.save(update_fields=['code_acces'])
+        audit_log(request, 'code_acces_quiz', cible=quiz, etablissement=etablissement_evaluation(quiz),
+                  details={'action': 'genere'})
+        return Response({'code_acces': quiz.code_acces})
+
     def _journaliser(self, action, instance):
         audit_log(self.request, action, cible=instance, etablissement=etablissement_evaluation(instance),
                   details={'type': 'quiz', 'titre': instance.titre})
+
+    def _journaliser_affectation(self, avant, instance):
+        details = acces.ecart_cibles(avant, acces.cibles(instance))
+        if details is not None:
+            audit_log(self.request, 'affectation_quiz', cible=instance,
+                      etablissement=etablissement_evaluation(instance), details=details)
 
 
 class QuestionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):

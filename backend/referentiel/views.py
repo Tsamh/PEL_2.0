@@ -5,7 +5,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 
@@ -14,7 +14,7 @@ from accounts.permissions import (
     GESTION, CREATEURS, TOUS_LES_ROLES, SUPERADMIN, ENSEIGNANT, ETUDIANT,
 )
 from accounts.scoping import (
-    EtablissementScopedMixin, classes_enseignant, classes_etudiant,
+    EtablissementScopedMixin, en_entier, classes_enseignant, classes_etudiant,
     q_filiere_niveau_etudiant, verifier_compte_du_perimetre, verifier_references_evaluation, MESSAGE_HORS_PERIMETRE,
 )
 from audit.services import log as audit_log
@@ -367,7 +367,7 @@ class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes').order_by('id')
+    queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes__membres').order_by('id')
     serializer_class = ClasseSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'filiere__etablissement'
@@ -398,7 +398,7 @@ class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Groupe.objects.select_related('classe').order_by('id')
+    queryset = Groupe.objects.select_related('classe', 'classe__filiere').prefetch_related('membres').order_by('id')
     serializer_class = GroupeSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'classe__filiere__etablissement'
@@ -408,6 +408,41 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def etudiant_scope(self, qs, user):
         return qs.filter(classe__in=classes_etudiant(user))
+
+    @action(detail=True, methods=['post'], url_path='membres')
+    def ajouter_membres(self, request, pk=None):
+        groupe = self.get_object()
+        ids = request.data.get('etudiants') if isinstance(request.data, dict) else None
+        if not isinstance(ids, list) or not ids:
+            raise ValidationError({'etudiants': ["Indiquez au moins un étudiant."]})
+        entiers = [en_entier(i) for i in ids]
+        if None in entiers or any(not 1 <= i <= 2**63 - 1 for i in entiers):
+            raise ValidationError({'etudiants': ["Les identifiants d'étudiants doivent être des entiers."]})
+        inscrits = set(
+            User.objects.filter(pk__in=entiers, role=ETUDIANT, inscriptions__classe=groupe.classe)
+            .values_list('pk', flat=True)
+        )
+        refuses = sorted(set(entiers) - inscrits)
+        if refuses:
+            raise ValidationError({'etudiants': [
+                f"Ces comptes ne sont pas des étudiants inscrits dans la classe {groupe.classe.code} : "
+                + ', '.join(str(i) for i in refuses) + '.'
+            ]})
+        groupe.membres.add(*inscrits)
+        audit_log(request, 'membre_groupe', cible=groupe, etablissement=groupe.classe.filiere.etablissement,
+                  details={'groupe': groupe.id, 'etudiants': sorted(inscrits)})
+        return Response(self.get_serializer(groupe).data)
+
+    @action(detail=True, methods=['delete'], url_path=r'membres/(?P<etudiant_id>[0-9]+)')
+    def retirer_membre(self, request, pk=None, etudiant_id=None):
+        groupe = self.get_object()
+        etudiant_id = int(etudiant_id)
+        if not groupe.membres.filter(pk=etudiant_id).exists():
+            raise NotFound("Cet étudiant n'est pas membre du groupe.")
+        groupe.membres.remove(etudiant_id)
+        audit_log(request, 'retrait_membre_groupe', cible=groupe, etablissement=groupe.classe.filiere.etablissement,
+                  details={'groupe': groupe.id, 'etudiant': etudiant_id})
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class InscriptionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):

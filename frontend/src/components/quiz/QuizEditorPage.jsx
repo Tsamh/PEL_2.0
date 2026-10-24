@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../services/api';
 import { messageErreur } from '../../services/erreurs';
+import AffectationQuiz from './AffectationQuiz';
+import AccesQuiz from './AccesQuiz';
+import { resumeCibles } from './cibles';
 
 const nouveauChoix = (texte = '', est_correct = false) => ({ texte, est_correct, points: 0 });
 const nouvelleQuestion = () => ({
@@ -12,6 +15,7 @@ const formulaireVide = {
   titre: '', description: '', filiere: '', niveau: '', annee_academique: '',
   duree_minutes: 30, date_debut: '', date_fin: '', est_publie: false,
   tentatives_autorisees: 1, reprise_autorisee: true, publication_resultats: 'immediate', afficher_corrige: false,
+  classes: [], groupes: [], etudiants: [],
 };
 
 // Date ISO du serveur vers le format d'un champ <input type="datetime-local">.
@@ -186,6 +190,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
       est_publie: item.est_publie, tentatives_autorisees: item.tentatives_autorisees,
       reprise_autorisee: item.reprise_autorisee, publication_resultats: item.publication_resultats,
       afficher_corrige: item.afficher_corrige,
+      classes: item.classes || [], groupes: item.groupes || [], etudiants: item.etudiants || [],
     });
     const chargees = (item.questions || []).map((q) => ({
       texte: q.texte, type_question: q.type_question, points: Number(q.points), mode_notation: q.mode_notation,
@@ -333,6 +338,19 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                 </div>
 
                 <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--gray-200)' }} />
+                <AffectationQuiz
+                  key={editingItem?.id || 'nouveau'}
+                  valeur={{ classes: form.classes, groupes: form.groupes, etudiants: form.etudiants }}
+                  onChange={(cibles) => setForm((f) => ({ ...f, ...cibles }))}
+                  etudiantsConnus={editingItem?.etudiants_detail || []} />
+                <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--gray-200)' }} />
+                {editingItem ? (
+                  <AccesQuiz quiz={editingItem} onCodeChange={fetchItems} />
+                ) : (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>Enregistrez le quiz pour générer un code d'accès et copier son lien.</p>
+                )}
+
+                <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--gray-200)' }} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3 style={{ margin: 0 }}>Questions ({questions.length})</h3>
                   {!verrouille && <button type="button" className="btn btn-sm btn-primary" onClick={() => setQuestions([...questions, nouvelleQuestion()])}>+ Ajouter</button>}
@@ -372,13 +390,19 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
         ) : (
           <table className="data-table">
             <thead>
-              <tr><th>Titre</th><th>Filière</th><th>Questions</th><th>Durée</th><th>Tentatives</th><th>Statut</th><th>Actions</th></tr>
+              <tr><th>Titre</th><th>Filière</th><th>Cible</th><th>Questions</th><th>Durée</th><th>Tentatives</th><th>Statut</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {items.map((item) => (
                 <tr key={item.id}>
                   <td><strong>{item.titre}</strong></td>
                   <td>{item.filiere_libelle || 'Toutes'}</td>
+                  <td>
+                    {item.nb_cibles > 0
+                      ? resumeCibles(item.classes_detail.length, item.groupes_detail.length, item.etudiants_detail.length)
+                      : (item.est_publie ? <span className="badge badge-pending">Non affecté</span> : '-')}
+                    {item.code_acces && <span className="badge badge-inactive" style={{ marginLeft: '6px' }}>Code</span>}
+                  </td>
                   <td>{item.questions?.length || 0}</td>
                   <td>{item.duree_minutes} min</td>
                   <td>{item.tentatives_autorisees}</td>

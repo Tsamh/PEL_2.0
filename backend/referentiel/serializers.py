@@ -122,10 +122,19 @@ class UESerializer(serializers.ModelSerializer):
 
 class GroupeSerializer(serializers.ModelSerializer):
     classe_libelle = serializers.CharField(source='classe.libelle', read_only=True)
+    membres_detail = serializers.SerializerMethodField()
 
     class Meta:
         model = Groupe
-        fields = '__all__'
+        fields = ['id', 'code', 'libelle', 'classe', 'classe_libelle', 'type_groupe', 'membres_detail']
+
+    def get_membres_detail(self, groupe):
+        # Un étudiant ne voit pas la liste de ses camarades.
+        request = self.context.get('request')
+        if request is None or request.user.role == 'etudiant':
+            return []
+        membres = [{'id': u.id, 'nom': u.get_full_name() or u.username} for u in groupe.membres.all()]
+        return sorted(membres, key=lambda m: m['nom'].lower())
 
 
 class ClasseSerializer(serializers.ModelSerializer):

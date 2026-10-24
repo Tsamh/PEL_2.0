@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
+from .acces import CLES_CIBLES, verifier_cibles
 from .exceptions import Conflit, MESSAGE_VERROU
 from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz
 from .passage import corrige_visible, meilleure_tentative, score_visible
@@ -109,35 +110,60 @@ class QuizSerializer(serializers.ModelSerializer):
     niveau_libelle = serializers.CharField(source='niveau.libelle', read_only=True, default=None)
     annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True, default=None)
     a_des_tentatives = serializers.SerializerMethodField()
+    classes_detail = serializers.SerializerMethodField()
+    groupes_detail = serializers.SerializerMethodField()
+    etudiants_detail = serializers.SerializerMethodField()
+    nb_cibles = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = '__all__'
-        read_only_fields = ['cree_par']
+        read_only_fields = ['cree_par', 'code_acces']
 
     def get_a_des_tentatives(self, quiz):
         return quiz.tentatives.exists()
+
+    def get_classes_detail(self, quiz):
+        return [{'id': c.id, 'code': c.code, 'libelle': c.libelle} for c in quiz.classes.all()]
+
+    def get_groupes_detail(self, quiz):
+        return [{'id': g.id, 'code': g.code, 'libelle': g.libelle, 'classe_code': g.classe.code} for g in quiz.groupes.all()]
+
+    def get_etudiants_detail(self, quiz):
+        return [{'id': u.id, 'nom': u.get_full_name() or u.username} for u in quiz.etudiants.all()]
+
+    def get_nb_cibles(self, quiz):
+        return len(quiz.classes.all()) + len(quiz.groupes.all()) + len(quiz.etudiants.all())
 
     def validate(self, attrs):
         debut = attrs.get('date_debut', getattr(self.instance, 'date_debut', None))
         fin = attrs.get('date_fin', getattr(self.instance, 'date_fin', None))
         if debut and fin and fin <= debut:
             raise serializers.ValidationError({'date_fin': "La date de fin doit être postérieure à la date de début."})
+        request = self.context.get('request')
+        if request is not None:
+            verifier_cibles(request.user, self.instance, attrs)
         return attrs
 
     def create(self, validated_data):
         questions_data = validated_data.pop('questions', [])
+        cibles_data = {cle: validated_data.pop(cle) for cle in CLES_CIBLES if cle in validated_data}
         quiz = Quiz.objects.create(**validated_data)
+        for cle, valeurs in cibles_data.items():
+            getattr(quiz, cle).set(valeurs)
         _creer_questions(quiz, questions_data)
         return quiz
 
     def update(self, instance, validated_data):
         questions_data = validated_data.pop('questions', None)
+        cibles_data = {cle: validated_data.pop(cle) for cle in CLES_CIBLES if cle in validated_data}
         if questions_data is not None and instance.tentatives.exists():
             raise Conflit(MESSAGE_VERROU)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+        for cle, valeurs in cibles_data.items():
+            getattr(instance, cle).set(valeurs)
         if questions_data is not None:
             instance.questions.all().delete()
             _creer_questions(instance, questions_data)
@@ -160,6 +186,7 @@ class QuizEtudiantSerializer(serializers.ModelSerializer):
     annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True, default=None)
     nb_questions = serializers.IntegerField(source='questions.count', read_only=True)
     etat = serializers.SerializerMethodField()
+    code_requis = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
@@ -167,9 +194,12 @@ class QuizEtudiantSerializer(serializers.ModelSerializer):
             'id', 'titre', 'description', 'filiere', 'filiere_libelle', 'niveau', 'niveau_libelle',
             'annee_academique', 'annee_libelle', 'duree_minutes', 'date_debut', 'date_fin',
             'tentatives_autorisees', 'reprise_autorisee', 'publication_resultats',
-            'cree_par_nom', 'nb_questions', 'etat',
+            'cree_par_nom', 'nb_questions', 'etat', 'code_requis',
         ]
         read_only_fields = fields
+
+    def get_code_requis(self, quiz):
+        return bool(quiz.code_acces)
 
     def get_etat(self, quiz):
         etudiant = self.context['request'].user
