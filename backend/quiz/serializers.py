@@ -5,7 +5,8 @@ from rest_framework import serializers
 
 from .acces import CLES_CIBLES, verifier_cibles
 from .exceptions import Conflit, MESSAGE_VERROU
-from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz
+from .banque import contenu_question, contenu_version, q_banque_visible
+from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz, QuestionBanque, VersionQuestion
 from .passage import corrige_visible, meilleure_tentative, score_visible
 
 
@@ -51,25 +52,77 @@ def verifier_coherence_question(attrs):
             raise serializers.ValidationError("Une réponse courte doit avoir au moins une réponse acceptée.")
 
 
+def verifier_penalite(attrs):
+    """La pénalité reste entre 0 et les points, et seulement en QCM tout ou rien ou en vrai/faux."""
+    penalite = attrs.get('penalite', Decimal('0'))
+    if not penalite:
+        return
+    type_question = attrs.get('type_question', 'qcm')
+    mode = attrs.get('mode_notation', Question.TOUT_OU_RIEN)
+    if not (type_question == 'vf' or (type_question == 'qcm' and mode == Question.TOUT_OU_RIEN)):
+        raise serializers.ValidationError(
+            {'penalite': ["La pénalité ne s'applique qu'aux QCM en tout ou rien et aux questions vrai/faux."]}
+        )
+    if penalite > attrs.get('points', Decimal('1')):
+        raise serializers.ValidationError({'penalite': ["La pénalité ne peut pas dépasser les points de la question."]})
+
+
 class QuestionCreateSerializer(serializers.ModelSerializer):
     choix = ChoixImbriqueSerializer(many=True, required=False)
+    source = serializers.PrimaryKeyRelatedField(queryset=VersionQuestion.objects.all(), required=False, allow_null=True)
 
     class Meta:
         model = Question
-        fields = ['id', 'texte', 'type_question', 'points', 'mode_notation', 'ordre', 'choix']
+        fields = ['id', 'texte', 'type_question', 'points', 'mode_notation', 'penalite', 'explication', 'source', 'ordre', 'choix']
         read_only_fields = ['id']
 
     def validate(self, attrs):
         verifier_coherence_question(attrs)
+        verifier_penalite(attrs)
+        source = attrs.get('source')
+        if source is not None:
+            request = self.context.get('request')
+            quiz = self.root.instance
+            deja_utilisee = isinstance(quiz, Quiz) and quiz.questions.filter(source=source).exists()
+            if request is not None and not deja_utilisee and not QuestionBanque.objects.filter(
+                q_banque_visible(request.user), pk=source.question_id,
+            ).exists():
+                raise serializers.ValidationError({'source': ["Cette version de la banque n'est pas disponible."]})
+        attrs['version_source'] = source.numero if source is not None else None
         return attrs
 
 
 class QuestionReadSerializer(serializers.ModelSerializer):
     choix = ChoixSerializer(many=True, read_only=True)
+    fiche_source = serializers.SerializerMethodField()
+    version_courante = serializers.SerializerMethodField()
+    modifiee_localement = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
         fields = '__all__'
+        read_only_fields = ['source', 'version_source']
+
+    def validate(self, attrs):
+        if self.instance is not None:
+            actuel = {k: getattr(self.instance, k) for k in ('type_question', 'mode_notation', 'points', 'penalite')}
+            verifier_penalite({**actuel, **attrs})
+        else:
+            verifier_penalite(attrs)
+        return attrs
+
+    def get_fiche_source(self, question):
+        return question.source.question_id if question.source_id else None
+
+    def get_version_courante(self, question):
+        if question.source_id is None:
+            return None
+        return max((v.numero for v in question.source.question.versions.all()), default=None)
+
+    def get_modifiee_localement(self, question):
+        if question.source_id is None:
+            return False
+        return contenu_question(question) != contenu_version(question.source)
 
 
 class ChoixEtudiantSerializer(serializers.ModelSerializer):
@@ -84,7 +137,7 @@ class QuestionEtudiantSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Question
-        fields = ['id', 'texte', 'type_question', 'points', 'ordre', 'est_multiple', 'choix']
+        fields = ['id', 'texte', 'type_question', 'points', 'penalite', 'ordre', 'est_multiple', 'choix']
 
     def get_choix(self, question):
         # Pour une réponse courte, les choix sont les réponses acceptées : ne jamais les envoyer.
@@ -268,6 +321,8 @@ class TentativeEtudiantSerializer(serializers.ModelSerializer):
                 'texte': question.texte,
                 'type_question': question.type_question,
                 'points': str(question.points),
+                'penalite': str(question.penalite),
+                'explication': question.explication,
                 'score_obtenu': str(reponse.score_obtenu) if reponse else '0.00',
                 'statut_correction': reponse.statut_correction if reponse else 'auto',
                 'choix': [{'id': c.id, 'texte': c.texte, 'est_correct': c.est_correct} for c in question.choix.all()],

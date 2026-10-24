@@ -205,7 +205,7 @@ export default function PasserQuiz() {
         <div className="form-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '12px' }}>
             <strong>Question {index + 1} sur {questions.length}</strong>
-            <span>{Number(question.points)} pt</span>
+            <span>{Number(question.points)} pt{Number(question.penalite) > 0 && `, réponse fausse : -${Number(question.penalite)} pt`}</span>
           </div>
           <p style={{ whiteSpace: 'pre-wrap', fontSize: '1.05rem' }}>{question.texte}</p>
           {question.type_question === 'courte' ? (

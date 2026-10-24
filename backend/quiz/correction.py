@@ -48,7 +48,11 @@ def noter(question, choix_ids, texte):
         return arrondir(_borner(total, question.points)), ReponseQuiz.AUTO, 0.0
 
     bonnes = {c.id for c in choix if c.est_correct}
-    score = question.points if coches and coches == bonnes else ZERO
+    if not coches:
+        return arrondir(ZERO), ReponseQuiz.AUTO, 0.0
+    # Réponse fausse : la pénalité de la question (0 par défaut) est retirée.
+    # ZERO - penalite plutôt que -penalite : évite une note « -0.00 » quand la pénalité vaut 0.
+    score = question.points if coches == bonnes else ZERO - question.penalite
     return arrondir(score), ReponseQuiz.AUTO, 0.0
 
 
@@ -70,6 +74,6 @@ def corriger_tentative(tentative):
 
 
 def recalculer_score(tentative):
-    tentative.score = arrondir(sum((r.score_obtenu for r in tentative.reponses.all()), ZERO))
+    tentative.score = arrondir(max(ZERO, sum((r.score_obtenu for r in tentative.reponses.all()), ZERO)))
     tentative.score_max = arrondir(sum((q.points for q in tentative.quiz.questions.all()), ZERO))
     tentative.save(update_fields=['score', 'score_max'])

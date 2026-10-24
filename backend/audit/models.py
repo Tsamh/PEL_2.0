@@ -29,6 +29,10 @@ class AuditLog(models.Model):
         ('echec_code_acces', "Essais de code d'accès épuisés"),
         ('membre_groupe', 'Ajout à un groupe'),
         ('retrait_membre_groupe', "Retrait d'un groupe"),
+        ('creation_question_banque', 'Création de question (banque)'),
+        ('version_question_banque', 'Nouvelle version de question (banque)'),
+        ('archivage_question_banque', 'Archivage de question (banque)'),
+        ('import_banque', 'Import de la banque de questions'),
     ]
 
     acteur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='actions_auditees')

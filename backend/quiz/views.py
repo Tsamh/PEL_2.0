@@ -30,7 +30,8 @@ def etablissement_evaluation(instance):
 class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = (
         Quiz.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par')
-        .prefetch_related('classes', 'groupes__classe', 'etudiants')
+        .prefetch_related('classes', 'groupes__classe', 'etudiants', 'questions__choix',
+                          'questions__source__question__versions')
     )
     serializer_class = QuizSerializer
     permission_classes = [RolePermission(read=TOUS_LES_ROLES, write=CREATEURS)]

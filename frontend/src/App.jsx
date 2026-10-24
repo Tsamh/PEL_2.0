@@ -24,6 +24,7 @@ import Corrections from './pages/teacher/Corrections';
 import ForceChangePassword from './pages/ForceChangePassword';
 import MesCours from './pages/teacher/MesCours';
 import MesQuiz from './pages/teacher/MesQuiz';
+import BanqueQuestions from './pages/teacher/BanqueQuestions';
 import TentativesQuiz from './pages/teacher/TentativesQuiz';
 import MesDevoirsRouter from './pages/MesDevoirsRouter';
 import Statistiques from './pages/teacher/Statistiques';
@@ -84,6 +85,7 @@ function App() {
             <Route path="devoirs/:id/corrections" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Corrections /></RoleRoute>} />
             <Route path="mes-cours" element={<RoleRoute roles={['enseignant']}><MesCours /></RoleRoute>} />
             <Route path="mes-quiz" element={<RoleRoute roles={['enseignant']}><MesQuiz /></RoleRoute>} />
+            <Route path="banque" element={<RoleRoute roles={[...GESTION, 'enseignant']}><BanqueQuestions /></RoleRoute>} />
             <Route path="mes-devoirs" element={<RoleRoute roles={['enseignant', 'etudiant']}><MesDevoirsRouter /></RoleRoute>} />
             <Route path="gestion-notes" element={<RoleRoute roles={['enseignant']}><GestionNotes /></RoleRoute>} />
             <Route path="statistiques" element={<RoleRoute roles={['enseignant']}><Statistiques /></RoleRoute>} />

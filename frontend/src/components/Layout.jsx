@@ -19,6 +19,7 @@ const adminMenu = [
   { path: '/responsables', label: 'Responsables', roles: ['superadmin', 'admin'] },
   { path: '/enseignants', label: 'Enseignants' },
   { path: '/quiz', label: 'Quiz' },
+  { path: '/banque', label: 'Banque de questions' },
   { path: '/devoirs', label: 'Devoirs de programmation' },
 ];
 
@@ -27,6 +28,7 @@ const teacherMenu = [
   { path: '/', label: 'Tableau de bord' },
   { path: '/mes-cours', label: 'Mes cours' },
   { path: '/mes-quiz', label: 'Mes quiz' },
+  { path: '/banque', label: 'Banque de questions' },
   { path: '/mes-devoirs', label: 'Mes devoirs' },
   { section: 'Notes' },
   { path: '/gestion-notes', label: 'Gestion des notes' },
