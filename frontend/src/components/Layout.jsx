@@ -13,6 +13,7 @@ const adminMenu = [
   { path: '/niveaux', label: 'Niveaux' },
   { path: '/ues', label: 'Unités d\'enseignement' },
   { path: '/classes', label: 'Classes' },
+  { path: '/groupes', label: 'Groupes TD/TP' },
   { section: 'Gestion' },
   { path: '/etudiants', label: 'Étudiants' },
   { path: '/responsables', label: 'Responsables', roles: ['superadmin', 'admin'] },

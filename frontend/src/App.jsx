@@ -12,6 +12,7 @@ import Filieres from './pages/Filieres';
 import Niveaux from './pages/Niveaux';
 import UEList from './pages/UEList';
 import Classes from './pages/Classes';
+import Groupes from './pages/Groupes';
 import StudentManagement from './pages/admin/StudentManagement';
 import Enseignants from './pages/admin/Enseignants';
 import Etablissements from './pages/admin/Etablissements';
@@ -67,6 +68,7 @@ function App() {
             <Route path="niveaux" element={<RoleRoute roles={GESTION}><Niveaux /></RoleRoute>} />
             <Route path="ues" element={<RoleRoute roles={GESTION}><UEList /></RoleRoute>} />
             <Route path="classes" element={<RoleRoute roles={GESTION}><Classes /></RoleRoute>} />
+            <Route path="groupes" element={<RoleRoute roles={GESTION}><Groupes /></RoleRoute>} />
             <Route path="etudiants" element={<RoleRoute roles={GESTION}><StudentManagement /></RoleRoute>} />
             <Route path="enseignants" element={<RoleRoute roles={GESTION}><Enseignants /></RoleRoute>} />
             <Route path="responsables" element={<RoleRoute roles={ADMINS}><Responsables /></RoleRoute>} />
