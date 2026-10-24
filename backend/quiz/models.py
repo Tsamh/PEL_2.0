@@ -3,6 +3,8 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.db.models import F
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 
@@ -99,6 +101,11 @@ class Question(models.Model):
                                  validators=[MinValueValidator(Decimal('0.01'))])
     mode_notation = models.CharField(max_length=12, choices=MODE_CHOICES, default=TOUT_OU_RIEN)
     ordre = models.PositiveIntegerField(default=0)
+    penalite = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0'),
+                                   validators=[MinValueValidator(Decimal('0'))])
+    explication = models.TextField(blank=True, default='')
+    source = models.ForeignKey('VersionQuestion', on_delete=models.SET_NULL, null=True, blank=True, related_name='copies')
+    version_source = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         verbose_name = "Question"
@@ -200,3 +207,84 @@ class ReponseQuiz(models.Model):
 
     def __str__(self):
         return f"{self.question} ({self.score_obtenu})"
+
+
+class TagQuestion(models.Model):
+    CHAPITRE = 'chapitre'
+    COMPETENCE = 'competence'
+    TYPE_CHOICES = [(CHAPITRE, 'Chapitre'), (COMPETENCE, 'Compétence')]
+
+    etablissement = models.ForeignKey('referentiel.Etablissement', on_delete=models.CASCADE, null=True, blank=True,
+                                      related_name='tags_questions')
+    type = models.CharField(max_length=12, choices=TYPE_CHOICES)
+    libelle = models.CharField(max_length=100)
+
+    class Meta:
+        verbose_name = "Tag de question"
+        verbose_name_plural = "Tags de questions"
+        ordering = ['type', 'libelle']
+        constraints = [
+            models.UniqueConstraint(F('etablissement'), F('type'), Lower('libelle'), name='tag_question_unique'),
+        ]
+
+    def __str__(self):
+        return self.libelle
+
+
+class QuestionBanque(models.Model):
+    FACILE = 'facile'
+    MOYEN = 'moyen'
+    DIFFICILE = 'difficile'
+    DIFFICULTE_CHOICES = [(FACILE, 'Facile'), (MOYEN, 'Moyen'), (DIFFICILE, 'Difficile')]
+
+    auteur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+                               related_name='questions_banque')
+    etablissement = models.ForeignKey('referentiel.Etablissement', on_delete=models.CASCADE, null=True, blank=True,
+                                      related_name='questions_banque')
+    ec = models.ForeignKey('referentiel.EC', on_delete=models.SET_NULL, null=True, blank=True,
+                           related_name='questions_banque')
+    partagee = models.BooleanField(default=False)
+    difficulte = models.CharField(max_length=10, choices=DIFFICULTE_CHOICES, default=MOYEN)
+    tags = models.ManyToManyField(TagQuestion, related_name='questions', blank=True)
+    archivee = models.BooleanField(default=False)
+    date_creation = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Question de la banque"
+        verbose_name_plural = "Questions de la banque"
+        ordering = ['-date_creation', '-id']
+
+    def __str__(self):
+        return f"Question {self.pk}"
+
+    @property
+    def courante(self):
+        """Version la plus récente (utilise le préchargement de `versions` s'il existe)."""
+        versions = list(self.versions.all())
+        return max(versions, key=lambda v: v.numero) if versions else None
+
+
+class VersionQuestion(models.Model):
+    question = models.ForeignKey(QuestionBanque, on_delete=models.CASCADE, related_name='versions')
+    numero = models.PositiveIntegerField()
+    texte = models.TextField()
+    type_question = models.CharField(max_length=10, choices=Question.TYPE_CHOICES, default='qcm')
+    points = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('1'),
+                                 validators=[MinValueValidator(Decimal('0.01'))])
+    mode_notation = models.CharField(max_length=12, choices=Question.MODE_CHOICES, default=Question.TOUT_OU_RIEN)
+    penalite = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0'),
+                                   validators=[MinValueValidator(Decimal('0'))])
+    explication = models.TextField(blank=True, default='')
+    choix = models.JSONField(default=list)
+    creee_par = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+                                  related_name='versions_questions')
+    date = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Version de question"
+        verbose_name_plural = "Versions de questions"
+        ordering = ['-numero']
+        constraints = [models.UniqueConstraint(fields=['question', 'numero'], name='version_question_unique')]
+
+    def __str__(self):
+        return f"{self.question} v{self.numero}"
