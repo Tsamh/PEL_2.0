@@ -26,6 +26,8 @@ import MesCours from './pages/teacher/MesCours';
 import MesQuiz from './pages/teacher/MesQuiz';
 import BanqueQuestions from './pages/teacher/BanqueQuestions';
 import TentativesQuiz from './pages/teacher/TentativesQuiz';
+import TableauBordQuiz from './pages/teacher/TableauBordQuiz';
+import FicheEtudiant from './pages/teacher/FicheEtudiant';
 import MesDevoirsRouter from './pages/MesDevoirsRouter';
 import Statistiques from './pages/teacher/Statistiques';
 import GestionNotes from './pages/teacher/GestionNotes';
@@ -80,6 +82,8 @@ function App() {
             <Route path="validations" element={<RoleRoute roles={['superadmin']}><Validations /></RoleRoute>} />
             <Route path="quiz" element={<RoleRoute roles={GESTION}><QuizManagement /></RoleRoute>} />
             <Route path="quiz/:id/tentatives" element={<RoleRoute roles={[...GESTION, 'enseignant']}><TentativesQuiz /></RoleRoute>} />
+            <Route path="quiz/:id/statistiques" element={<RoleRoute roles={[...GESTION, 'enseignant']}><TableauBordQuiz /></RoleRoute>} />
+            <Route path="etudiants/:id/resultats" element={<RoleRoute roles={[...GESTION, 'enseignant']}><FicheEtudiant /></RoleRoute>} />
             <Route path="devoirs" element={<RoleRoute roles={GESTION}><DevoirManagement /></RoleRoute>} />
             <Route path="devoirs/:id" element={<DevoirDetail />} />
             <Route path="devoirs/:id/corrections" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Corrections /></RoleRoute>} />
