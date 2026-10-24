@@ -20,6 +20,10 @@ export default function PasserQuiz() {
   const [soumission, setSoumission] = useState(false);
   const minuteurs = useRef({});
   const enAttente = useRef({});
+  const dernieres = useRef({});
+  const chaines = useRef({});
+  const nbEnvois = useRef(0);
+  const enSoumission = useRef(false);
 
   const appliquer = useCallback((data) => {
     setTentative(data);
@@ -34,31 +38,60 @@ export default function PasserQuiz() {
     try {
       const res = await api.get(`/quiz/tentatives/${id}/`);
       appliquer(res.data);
+      setError('');
     } catch (err) {
       setError(messageErreur(err, 'Tentative introuvable.'));
     }
   }, [id, appliquer]);
 
+  // Enregistre une réponse. Les envois d'une même question sont chaînés (le dernier envoie toujours la valeur la plus récente).
+  // Renvoie une promesse qui vaut true si la réponse est enregistrée, false sinon.
+  const sauvegarder = useCallback((questionId, valeur) => {
+    dernieres.current[questionId] = valeur;
+    nbEnvois.current += 1;
+    setEtatSauvegarde('enregistrement');
+    const precedent = chaines.current[questionId] || Promise.resolve();
+    const envoi = precedent.then(async () => {
+      const courante = dernieres.current[questionId];
+      let ok = true;
+      try {
+        await api.put(`/quiz/tentatives/${id}/repondre/`, { question: questionId, choix: courante.choix, texte: courante.texte });
+        setError('');
+      } catch (err) {
+        if (err.response?.status === 409) {
+          charger();
+        } else {
+          ok = false;
+          // Conservée pour être renvoyée à la prochaine soumission ou au prochain changement de page.
+          if (!(questionId in enAttente.current) && dernieres.current[questionId] === courante) enAttente.current[questionId] = courante;
+          setError(messageErreur(err, "La réponse n'a pas pu être enregistrée."));
+        }
+      }
+      nbEnvois.current -= 1;
+      if (!ok) setEtatSauvegarde('erreur');
+      else if (nbEnvois.current === 0) setEtatSauvegarde('enregistre');
+      return ok;
+    });
+    chaines.current[questionId] = envoi;
+    return envoi;
+  }, [id, charger]);
+
+  // Envoie sans attendre les réponses saisies dont l'envoi différé n'est pas encore parti.
+  const envoyerEnAttente = useCallback(() => {
+    const restantes = Object.entries(enAttente.current);
+    enAttente.current = {};
+    Object.values(minuteurs.current).forEach(clearTimeout);
+    return Promise.all(restantes.map(([questionId, valeur]) => sauvegarder(Number(questionId), valeur)));
+  }, [sauvegarder]);
+
   useEffect(() => {
     charger();
-    const timers = minuteurs.current;
-    return () => Object.values(timers).forEach(clearTimeout);
-  }, [charger]);
-
-  const sauvegarder = useCallback(async (questionId, valeur) => {
-    setEtatSauvegarde('enregistrement');
-    try {
-      await api.put(`/quiz/tentatives/${id}/repondre/`, { question: questionId, choix: valeur.choix, texte: valeur.texte });
-      setEtatSauvegarde('enregistre');
-    } catch (err) {
-      if (err.response?.status === 409) {
-        charger();
-      } else {
-        setEtatSauvegarde('erreur');
-        setError(messageErreur(err, "La réponse n'a pas pu être enregistrée."));
-      }
-    }
-  }, [id, charger]);
+    window.addEventListener('beforeunload', envoyerEnAttente);
+    return () => {
+      window.removeEventListener('beforeunload', envoyerEnAttente);
+      envoyerEnAttente();
+    };
+  }, [charger, envoyerEnAttente]);
 
   const modifier = (question, valeur, differe = false) => {
     setReponses((r) => ({ ...r, [question.id]: valeur }));
@@ -70,31 +103,35 @@ export default function PasserQuiz() {
         sauvegarder(question.id, valeur);
       }, 800);
     } else {
+      delete enAttente.current[question.id];
       sauvegarder(question.id, valeur);
     }
   };
 
-  const viderEnAttente = useCallback(async () => {
-    const restantes = Object.entries(enAttente.current);
-    enAttente.current = {};
-    Object.values(minuteurs.current).forEach(clearTimeout);
-    await Promise.all(restantes.map(([questionId, valeur]) => sauvegarder(Number(questionId), valeur)));
-  }, [sauvegarder]);
-
-  const soumettre = useCallback(async () => {
+  const soumettre = useCallback(async (tempsEcoule = false) => {
+    if (enSoumission.current) return;
+    enSoumission.current = true;
     setSoumission(true);
     setConfirmation(false);
     try {
-      await viderEnAttente();
+      await envoyerEnAttente();
+      const resultats = await Promise.all(Object.values(chaines.current));
+      if (!resultats.every(Boolean)) {
+        setError("Certaines réponses n'ont pas pu être enregistrées. Vérifiez votre connexion puis réessayez.");
+        // Une fois le temps écoulé, le serveur clôture la tentative : on tente quand même la soumission.
+        if (!tempsEcoule) return;
+      }
       const res = await api.post(`/quiz/tentatives/${id}/soumettre/`);
       appliquer(res.data);
+      setError('');
     } catch (err) {
       if (err.response?.status === 409) charger();
       else setError(messageErreur(err, 'La soumission a échoué. Réessayez.'));
     } finally {
+      enSoumission.current = false;
       setSoumission(false);
     }
-  }, [id, viderEnAttente, appliquer, charger]);
+  }, [id, envoyerEnAttente, appliquer, charger]);
 
   if (error && !tentative) return <div className="alert alert-error">{error}</div>;
   if (!tentative) return <div className="loading">Chargement...</div>;
@@ -134,7 +171,7 @@ export default function PasserQuiz() {
           <span style={{ fontSize: '0.9rem', color: etatSauvegarde === 'erreur' ? 'var(--danger, #dc2626)' : 'var(--gray-500)' }}>
             {LIBELLES_SAUVEGARDE[etatSauvegarde] || ''}
           </span>
-          <CountdownTimer dateFin={finLocale} onTimeUp={soumettre} />
+          <CountdownTimer dateFin={finLocale} onTimeUp={() => soumettre(true)} />
         </div>
       </div>
 
@@ -187,7 +224,7 @@ export default function PasserQuiz() {
         {confirmation ? (
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span>Soumettre définitivement ?</span>
-            <button type="button" className="btn btn-success" disabled={soumission} onClick={soumettre}>{soumission ? 'Envoi...' : 'Oui, soumettre'}</button>
+            <button type="button" className="btn btn-success" disabled={soumission} onClick={() => soumettre()}>{soumission ? 'Envoi...' : 'Oui, soumettre'}</button>
             <button type="button" className="btn btn-secondary" onClick={() => setConfirmation(false)}>Annuler</button>
           </div>
         ) : (

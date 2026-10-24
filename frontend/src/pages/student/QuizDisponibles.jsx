@@ -24,11 +24,12 @@ export default function QuizDisponibles() {
 
   useEffect(() => { fetchItems(); }, []);
 
-  const fetchItems = async () => {
-    setLoading(true);
+  const fetchItems = async (silencieux = false) => {
+    if (!silencieux) setLoading(true);
     try {
       const res = await api.get('/quiz/quizzes/');
       setItems(res.data.results || res.data);
+      if (!silencieux) setError('');
     } catch (err) {
       setError(messageErreur(err, 'Erreur lors du chargement des quiz.'));
     } finally {
@@ -44,7 +45,7 @@ export default function QuizDisponibles() {
       navigate(`/quiz-disponibles/tentatives/${res.data.id}`);
     } catch (err) {
       setError(messageErreur(err, 'Impossible de démarrer ce quiz.'));
-      fetchItems();
+      fetchItems(true);
     } finally {
       setDemarrage(null);
     }
