@@ -58,6 +58,10 @@ class Quiz(models.Model):
     publication_resultats = models.CharField(max_length=10, choices=PUBLICATION_CHOICES, default=PUBLICATION_IMMEDIATE)
     resultats_publies = models.BooleanField(default=False)
     afficher_corrige = models.BooleanField(default=False)
+    classes = models.ManyToManyField('referentiel.Classe', related_name='quizzes_affectes', blank=True)
+    groupes = models.ManyToManyField('referentiel.Groupe', related_name='quizzes_affectes', blank=True)
+    etudiants = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='quizzes_affectes', blank=True)
+    code_acces = models.CharField(max_length=6, blank=True, default='')
     cree_par = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='quizzes_crees')
     date_creation = models.DateTimeField(auto_now_add=True)
 

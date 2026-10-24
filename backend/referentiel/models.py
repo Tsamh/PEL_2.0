@@ -130,6 +130,7 @@ class Groupe(models.Model):
     libelle = models.CharField(max_length=200)
     classe = models.ForeignKey(Classe, on_delete=models.CASCADE, related_name='groupes')
     type_groupe = models.CharField(max_length=2, choices=TYPE_CHOICES, default='td')
+    membres = models.ManyToManyField('accounts.User', related_name='groupes', blank=True)
 
     class Meta:
         verbose_name = "Groupe"
