@@ -4,7 +4,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .exceptions import Conflit, MESSAGE_VERROU
-from .models import Quiz, Question, Choix, TentativeQuiz
+from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz
 from .passage import corrige_visible, meilleure_tentative, score_visible
 
 
@@ -236,3 +236,50 @@ class TentativeEtudiantSerializer(serializers.ModelSerializer):
                 },
             })
         return corrige
+
+
+class TentativeEnseignantSerializer(serializers.ModelSerializer):
+    etudiant_nom = serializers.SerializerMethodField()
+    duree_secondes = serializers.IntegerField(read_only=True)
+    est_provisoire = serializers.BooleanField(read_only=True)
+    nb_a_valider = serializers.SerializerMethodField()
+    est_meilleure = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TentativeQuiz
+        fields = [
+            'id', 'etudiant', 'etudiant_nom', 'numero', 'statut', 'debut', 'soumise_le', 'soumission_auto',
+            'duree_secondes', 'score', 'score_max', 'est_provisoire', 'nb_a_valider', 'est_meilleure',
+        ]
+        read_only_fields = fields
+
+    def get_etudiant_nom(self, tentative):
+        return tentative.etudiant.get_full_name() or tentative.etudiant.username
+
+    def get_nb_a_valider(self, tentative):
+        return sum(1 for r in tentative.reponses.all() if r.statut_correction == ReponseQuiz.A_VALIDER)
+
+    def get_est_meilleure(self, tentative):
+        return tentative.id in self.context.get('meilleures', set())
+
+
+class ReponseCorrectionSerializer(serializers.ModelSerializer):
+    etudiant_nom = serializers.SerializerMethodField()
+    question_texte = serializers.CharField(source='question.texte', read_only=True)
+    points = serializers.DecimalField(source='question.points', max_digits=6, decimal_places=2, read_only=True)
+    reponses_acceptees = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReponseQuiz
+        fields = [
+            'id', 'tentative', 'etudiant_nom', 'question', 'question_texte', 'points', 'texte_reponse',
+            'reponses_acceptees', 'score_obtenu', 'similarite', 'statut_correction', 'corrige_le',
+        ]
+        read_only_fields = fields
+
+    def get_etudiant_nom(self, reponse):
+        etudiant = reponse.tentative.etudiant
+        return etudiant.get_full_name() or etudiant.username
+
+    def get_reponses_acceptees(self, reponse):
+        return [c.texte for c in reponse.question.choix.all() if c.est_correct]
