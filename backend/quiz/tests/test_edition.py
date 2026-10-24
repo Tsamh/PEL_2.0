@@ -63,6 +63,10 @@ class CoherenceQuestionsTests(TestCase):
             'qcm un seul choix': qcm(choix=[{'texte': 'a', 'est_correct': True}]),
             'par choix somme fausse': qcm(points=1, mode='par_choix', choix=[
                 {'texte': 'a', 'est_correct': True, 'points': '0.5'}, {'texte': 'b', 'points': '0'}]),
+            'par choix points sur un choix faux': qcm(points=1, mode='par_choix', choix=[
+                {'texte': 'a', 'est_correct': True, 'points': '0.5'}, {'texte': 'b', 'points': '0.5'}]),
+            'par choix bonne réponse sans points': qcm(points=1, mode='par_choix', choix=[
+                {'texte': 'a', 'est_correct': True, 'points': '1'}, {'texte': 'b', 'est_correct': True, 'points': '0'}]),
             'courte sans réponse': {'texte': 'x', 'type_question': 'courte', 'choix': [{'texte': ' ', 'est_correct': True}]},
             'points nuls': qcm(points=0),
         }

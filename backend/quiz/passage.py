@@ -1,4 +1,5 @@
 """Cycle de vie d'une tentative de quiz : démarrage, réponses, soumission, expiration, visibilité."""
+import logging
 from datetime import timedelta
 
 from django.conf import settings
@@ -14,6 +15,8 @@ from audit.services import log as audit_log
 from .correction import corriger_tentative
 from .exceptions import Conflit
 from .models import Quiz, ReponseQuiz, TentativeQuiz
+
+logger = logging.getLogger(__name__)
 
 TOLERANCE = timedelta(seconds=30)
 TEXTE_MAX = 5000
@@ -82,6 +85,8 @@ def enregistrer_reponse(tentative, data):
 
 
 def _ecrire_reponse(tentative, data):
+    if not isinstance(data, dict):
+        _refus("La réponse doit être un objet avec les champs question, choix et texte.")
     question_id = en_entier(data.get('question'))
     question = None
     if question_id is not None:
@@ -145,9 +150,17 @@ def cloturer_si_expiree(tentative):
 
 
 def cloturer_expirees(queryset=None):
+    """Soumet les tentatives expirées. Une erreur sur une tentative est journalisée sans arrêter le lot."""
     qs = TentativeQuiz.objects.all() if queryset is None else queryset
     limite = timezone.now() - TOLERANCE
-    return sum(1 for t in qs.filter(statut=TentativeQuiz.EN_COURS, fin_prevue__lt=limite) if soumettre(t, auto=True))
+    nombre = 0
+    for tentative in qs.filter(statut=TentativeQuiz.EN_COURS, fin_prevue__lt=limite):
+        try:
+            if soumettre(tentative, auto=True):
+                nombre += 1
+        except Exception:
+            logger.exception("Échec de la soumission automatique de la tentative %s", tentative.pk)
+    return nombre
 
 
 def envoyer_accuse(tentative):

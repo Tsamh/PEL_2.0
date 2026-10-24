@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from accounts.testing import build_world, client_for, make_user
 from audit.models import AuditLog
-from quiz.models import Quiz, TentativeQuiz
+from quiz.models import Choix, Question, Quiz, TentativeQuiz
 from referentiel.models import Inscription
 
 Q = '/api/quiz'
@@ -164,3 +164,46 @@ class PassageApiTests(TestCase):
             with self.subTest(role=user.role):
                 self.assertEqual(self.demarrer(client=client_for(user)).status_code, 403)
                 self.assertEqual(client_for(user).get(f'{Q}/tentatives/').status_code, 403)
+
+    def test_question_courte_sans_reponses_acceptees(self):
+        courte = Question.objects.create(quiz=self.quiz, texte='Capitale ?', type_question='courte', points=1, ordre=2)
+        Choix.objects.create(question=courte, texte='Ouagadougou', est_correct=True, ordre=1)
+        res = self.demarrer()
+        question = next(q for q in res.data['questions'] if q['id'] == courte.id)
+        self.assertEqual(question['choix'], [])
+        self.assertNotIn('Ouagadougou', json.dumps(res.data, default=str))
+        detail = self.client_etu.get(f'{Q}/tentatives/{res.data["id"]}/')
+        self.assertNotIn('Ouagadougou', json.dumps(detail.data, default=str))
+
+    def test_repondre_corps_non_objet(self):
+        tentative_id = self.demarrer().data['id']
+        url = f'{Q}/tentatives/{tentative_id}/repondre/'
+        for corps in ([1], 'abc', 5):
+            with self.subTest(corps=corps):
+                self.assertEqual(self.client_etu.put(url, corps, format='json').status_code, 400)
+
+    def test_repondre_et_soumettre_reserves_a_l_etudiant(self):
+        tentative_id = self.demarrer().data['id']
+        client_ens = client_for(self.a.ens)
+        self.assertEqual(self.repondre(tentative_id, [self.bon.id], client=client_ens).status_code, 403)
+        self.assertEqual(client_ens.post(f'{Q}/tentatives/{tentative_id}/soumettre/').status_code, 403)
+
+    def test_soumettre_tentative_d_un_autre_etudiant(self):
+        tentative_id = self.demarrer().data['id']
+        autre = make_user('etu3A', 'etudiant', self.a.etab)
+        Inscription.objects.create(etudiant=autre, classe=self.a.classe)
+        self.assertEqual(client_for(autre).post(f'{Q}/tentatives/{tentative_id}/soumettre/').status_code, 404)
+        self.assertEqual(TentativeQuiz.objects.get(pk=tentative_id).statut, 'en_cours')
+
+    def test_etat_des_tentatives_expirees_a_jour(self):
+        tentative_id = self.demarrer().data['id']
+        TentativeQuiz.objects.filter(pk=tentative_id).update(fin_prevue=timezone.now() - timedelta(minutes=2))
+        liste = self.client_etu.get(f'{Q}/quizzes/').data['results'][0]
+        self.assertIsNone(liste['etat']['tentative_en_cours'])
+        self.assertEqual(liste['etat']['derniere_tentative'], tentative_id)
+        TentativeQuiz.objects.filter(pk=tentative_id).update(statut='en_cours', soumise_le=None)
+        detail = self.client_etu.get(f'{Q}/quizzes/{self.quiz.id}/').data
+        self.assertIsNone(detail['etat']['tentative_en_cours'])
+        TentativeQuiz.objects.filter(pk=tentative_id).update(statut='en_cours', soumise_le=None)
+        tentatives = self.client_etu.get(f'{Q}/tentatives/').data['results']
+        self.assertEqual(tentatives[0]['statut'], 'soumise')

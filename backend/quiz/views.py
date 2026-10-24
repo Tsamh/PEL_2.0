@@ -46,6 +46,19 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def etudiant_scope(self, qs, user):
         return qs.filter(est_publie=True, filiere_id__in=filieres_etudiant(user))
 
+    def _cloturer_expirees_etudiant(self, request):
+        # L'état (tentative en cours, dernière tentative) doit refléter les tentatives expirées.
+        if request.user.role == ETUDIANT:
+            passage.cloturer_expirees(TentativeQuiz.objects.filter(etudiant=request.user))
+
+    def list(self, request, *args, **kwargs):
+        self._cloturer_expirees_etudiant(request)
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        self._cloturer_expirees_etudiant(request)
+        return super().retrieve(request, *args, **kwargs)
+
     def perform_create(self, serializer, **kwargs):
         verifier_filiere_du_perimetre(self.request.user, serializer.validated_data.get('filiere'))
         verifier_references_evaluation(self.request.user, serializer.validated_data)
@@ -178,6 +191,10 @@ class TentativeViewSet(viewsets.ReadOnlyModelViewSet):
         tentative = super().get_object()
         passage.cloturer_si_expiree(tentative)
         return tentative
+
+    def list(self, request, *args, **kwargs):
+        passage.cloturer_expirees(self.get_queryset())
+        return super().list(request, *args, **kwargs)
 
     @action(detail=True, methods=['put'])
     def repondre(self, request, pk=None):

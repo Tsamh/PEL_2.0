@@ -40,6 +40,11 @@ def verifier_coherence_question(attrs):
                 raise serializers.ValidationError(
                     f"En notation par choix, la somme des points positifs ({total}) doit être égale aux points de la question ({points})."
                 )
+            if any(bool(c.get('est_correct')) != (c.get('points', Decimal('0')) > 0) for c in choix):
+                raise serializers.ValidationError(
+                    "En notation par choix, seuls les choix qui rapportent des points (points supérieurs à 0) "
+                    "doivent être marqués comme bonnes réponses, et tous doivent l'être."
+                )
     elif type_question == 'courte':
         if not any(c.get('texte', '').strip() for c in bonnes):
             raise serializers.ValidationError("Une réponse courte doit avoir au moins une réponse acceptée.")
@@ -73,12 +78,18 @@ class ChoixEtudiantSerializer(serializers.ModelSerializer):
 
 
 class QuestionEtudiantSerializer(serializers.ModelSerializer):
-    choix = ChoixEtudiantSerializer(many=True, read_only=True)
+    choix = serializers.SerializerMethodField()
     est_multiple = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Question
         fields = ['id', 'texte', 'type_question', 'points', 'ordre', 'est_multiple', 'choix']
+
+    def get_choix(self, question):
+        # Pour une réponse courte, les choix sont les réponses acceptées : ne jamais les envoyer.
+        if question.type_question == 'courte':
+            return []
+        return ChoixEtudiantSerializer(question.choix.all(), many=True).data
 
 
 def _creer_questions(quiz, questions_data):

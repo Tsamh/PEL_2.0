@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
+from unittest import mock
 
 from django.core import mail
 from django.core.management import call_command
@@ -131,6 +132,24 @@ class PassageServiceTests(TestCase):
         tentative.refresh_from_db()
         en_cours.refresh_from_db()
         self.assertEqual((tentative.statut, en_cours.statut), ('soumise', 'en_cours'))
+
+    def test_cloturer_expirees_continue_apres_une_erreur(self):
+        premiere, _ = passage.demarrer(self.quiz, self.a.etu)
+        seconde, _ = passage.demarrer(self.w.b.quiz, self.w.b.etu)
+        self.expirer(premiere)
+        self.expirer(seconde)
+        original = passage.soumettre
+
+        def soumettre(tentative, **kwargs):
+            if tentative.pk == premiere.pk:
+                raise RuntimeError('panne simulée')
+            return original(tentative, **kwargs)
+
+        with mock.patch.object(passage, 'soumettre', side_effect=soumettre),                 self.assertLogs('quiz.passage', level='ERROR'):
+            self.assertEqual(passage.cloturer_expirees(), 1)
+        premiere.refresh_from_db()
+        seconde.refresh_from_db()
+        self.assertEqual((premiere.statut, seconde.statut), ('en_cours', 'soumise'))
 
     def test_visibilite(self):
         self.quiz.tentatives_autorisees = 2
