@@ -7,6 +7,7 @@ GESTION = {'superadmin', 'admin', 'responsable_formation'}
 CREATEURS = GESTION | {'enseignant'}
 
 LECTURE = {
+    '/api/quiz/quizzes/statistiques/': CREATEURS,
     '/api/referentiel/etablissements/': GESTION,
     '/api/referentiel/annees-academiques/': TOUS,
     '/api/referentiel/filieres/': TOUS,

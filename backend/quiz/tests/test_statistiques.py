@@ -155,3 +155,51 @@ class StatistiquesServiceTests(Scenario, TestCase):
         self.assertEqual((dernier['nb_tentatives'], dernier['score'], dernier['score_max'], dernier['pourcentage']),
                          (2, '3.00', '3.00', '100.00'))
         self.assertEqual(statistiques.resultats_etudiant(self.a.etu, Quiz.objects.none())['resultats'], [])
+
+
+class StatistiquesApiTests(Scenario, TestCase):
+    def setUp(self):
+        self.preparer()
+
+    def test_tableau_de_bord(self):
+        res = client_for(self.a.ens).get(f'{Q}/quizzes/{self.quiz.id}/statistiques/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(set(res.data), {'population', 'notes', 'distribution', 'questions', 'etudiants'})
+        self.assertEqual(res.data['population']['taux_participation'], '60.00')
+        self.assertEqual(client_for(self.a.admin).get(f'{Q}/quizzes/{self.quiz.id}/statistiques/').status_code, 200)
+
+    def test_droits(self):
+        url = f'{Q}/quizzes/{self.quiz.id}/statistiques/'
+        self.assertEqual(client_for(self.w.b.ens).get(url).status_code, 404)
+        self.assertEqual(client_for(self.w.b.admin).get(url).status_code, 404)
+        self.assertEqual(client_for(self.a.etu).get(url).status_code, 403)
+        self.assertEqual(client_for(self.a.etu).get(f'{Q}/quizzes/statistiques/').status_code, 403)
+        self.assertEqual(client_for(self.a.etu).get(f'{Q}/etudiants/{self.a.etu.id}/resultats/').status_code, 403)
+
+    def test_tentatives_expirees_cloturees(self):
+        t = TentativeQuiz.objects.get(etudiant=self.etu3)
+        TentativeQuiz.objects.filter(pk=t.pk).update(fin_prevue=timezone.now() - timedelta(hours=1))
+        res = client_for(self.a.ens).get(f'{Q}/quizzes/{self.quiz.id}/statistiques/')
+        self.assertEqual(res.data['population']['soumis'], 4)
+
+    def test_vue_ensemble(self):
+        res = client_for(self.a.ens).get(f'{Q}/quizzes/statistiques/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([q['id'] for q in res.data['results']], [self.quiz.id])
+        ligne = res.data['results'][0]
+        self.assertEqual(ligne['notes']['moyenne'], '1.33')
+        self.assertEqual(ligne['nb_a_valider'], 4)
+        ids_b = [q['id'] for q in client_for(self.w.b.ens).get(f'{Q}/quizzes/statistiques/').data['results']]
+        self.assertEqual(ids_b, [self.w.b.quiz.id])
+
+    def test_fiche_etudiant(self):
+        url = f'{Q}/etudiants/{self.a.etu.id}/resultats/'
+        res = client_for(self.a.ens).get(url)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([r['titre'] for r in res.data['resultats']], ['Quiz A'])
+        self.assertEqual(client_for(self.a.admin).get(url).status_code, 200)
+        self.assertEqual(client_for(self.w.b.ens).get(url).status_code, 404)
+        self.assertEqual(client_for(self.w.b.admin).get(url).status_code, 404)
+        self.assertEqual(client_for(self.a.ens).get(f'{Q}/etudiants/{self.w.b.etu.id}/resultats/').status_code, 404)
+        self.assertEqual(client_for(self.a.ens).get(f'{Q}/etudiants/{self.a.ens.id}/resultats/').status_code, 404)
+        self.assertEqual(client_for(self.a.ens).get(f'{Q}/etudiants/99999999999999999999999/resultats/').status_code, 404)
