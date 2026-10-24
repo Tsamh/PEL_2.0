@@ -88,7 +88,7 @@ function App() {
             <Route path="banque" element={<RoleRoute roles={[...GESTION, 'enseignant']}><BanqueQuestions /></RoleRoute>} />
             <Route path="mes-devoirs" element={<RoleRoute roles={['enseignant', 'etudiant']}><MesDevoirsRouter /></RoleRoute>} />
             <Route path="gestion-notes" element={<RoleRoute roles={['enseignant']}><GestionNotes /></RoleRoute>} />
-            <Route path="statistiques" element={<RoleRoute roles={['enseignant']}><Statistiques /></RoleRoute>} />
+            <Route path="statistiques" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Statistiques /></RoleRoute>} />
             <Route path="quiz-disponibles" element={<RoleRoute roles={['etudiant']}><QuizDisponibles /></RoleRoute>} />
             <Route path="quiz-disponibles/quiz/:id" element={<RoleRoute roles={['etudiant']}><FicheQuiz /></RoleRoute>} />
             <Route path="quiz-disponibles/tentatives/:id" element={<RoleRoute roles={['etudiant']}><PasserQuiz /></RoleRoute>} />
