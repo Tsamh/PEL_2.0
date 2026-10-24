@@ -90,6 +90,8 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[IsEtudiant])
     def demarrer(self, request, pk=None):
         quiz = self.get_object()
+        if quiz.code_acces and not passage.reprise_possible(quiz, request.user):
+            acces.verifier_code(request, quiz)
         tentative, creee = passage.demarrer(quiz, request.user)
         if creee:
             audit_log(request, 'demarrage_quiz', cible=tentative, details={'quiz': quiz.titre, 'numero': tentative.numero})
@@ -121,6 +123,21 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         quiz.save(update_fields=['resultats_publies'])
         audit_log(request, 'publication_resultats', cible=quiz, details={'titre': quiz.titre})
         return Response({'resultats_publies': True})
+
+    @action(detail=True, methods=['post', 'delete'], permission_classes=[RolePermission(write=CREATEURS)])
+    def code_acces(self, request, pk=None):
+        quiz = self.get_object()
+        if request.method == 'DELETE':
+            quiz.code_acces = ''
+            quiz.save(update_fields=['code_acces'])
+            audit_log(request, 'code_acces_quiz', cible=quiz, etablissement=etablissement_evaluation(quiz),
+                      details={'action': 'retire'})
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        quiz.code_acces = acces.generer_code()
+        quiz.save(update_fields=['code_acces'])
+        audit_log(request, 'code_acces_quiz', cible=quiz, etablissement=etablissement_evaluation(quiz),
+                  details={'action': 'genere'})
+        return Response({'code_acces': quiz.code_acces})
 
     def _journaliser(self, action, instance):
         audit_log(self.request, action, cible=instance, etablissement=etablissement_evaluation(instance),

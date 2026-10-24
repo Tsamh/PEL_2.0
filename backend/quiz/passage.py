@@ -33,6 +33,12 @@ def est_expiree(tentative):
     return tentative.statut == TentativeQuiz.EN_COURS and timezone.now() > tentative.fin_prevue + TOLERANCE
 
 
+def reprise_possible(quiz, etudiant):
+    """Vrai si demarrer reprendrait une tentative en cours au lieu d'en créer une."""
+    en_cours = quiz.tentatives.filter(etudiant=etudiant, statut=TentativeQuiz.EN_COURS).first()
+    return en_cours is not None and quiz.reprise_autorisee and not est_expiree(en_cours)
+
+
 def demarrer(quiz, etudiant):
     """Renvoie (tentative, créée). Reprend la tentative en cours si la reprise est autorisée."""
     en_cours = quiz.tentatives.filter(etudiant=etudiant, statut=TentativeQuiz.EN_COURS).first()

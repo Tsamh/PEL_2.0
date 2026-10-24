@@ -186,6 +186,7 @@ class QuizEtudiantSerializer(serializers.ModelSerializer):
     annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True, default=None)
     nb_questions = serializers.IntegerField(source='questions.count', read_only=True)
     etat = serializers.SerializerMethodField()
+    code_requis = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
@@ -193,9 +194,12 @@ class QuizEtudiantSerializer(serializers.ModelSerializer):
             'id', 'titre', 'description', 'filiere', 'filiere_libelle', 'niveau', 'niveau_libelle',
             'annee_academique', 'annee_libelle', 'duree_minutes', 'date_debut', 'date_fin',
             'tentatives_autorisees', 'reprise_autorisee', 'publication_resultats',
-            'cree_par_nom', 'nb_questions', 'etat',
+            'cree_par_nom', 'nb_questions', 'etat', 'code_requis',
         ]
         read_only_fields = fields
+
+    def get_code_requis(self, quiz):
+        return bool(quiz.code_acces)
 
     def get_etat(self, quiz):
         etudiant = self.context['request'].user

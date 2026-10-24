@@ -1,9 +1,14 @@
 """Accès des étudiants aux quiz : affectation (classes, groupes, étudiants) et code d'accès."""
+import hmac
+import secrets
+
+from django.core.cache import cache
 from django.db.models import Q
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import Throttled, ValidationError
 
 from accounts.permissions import ETUDIANT, SUPERADMIN
 from accounts.scoping import classes_du_perimetre
+from audit.services import log as audit_log
 from referentiel.models import Inscription
 
 from .models import Quiz
@@ -72,3 +77,35 @@ def verifier_cibles(acteur, quiz, attrs):
                 erreurs.setdefault('etudiants', []).append(f"L'étudiant {_nom(etudiant)} ne fait pas partie de votre périmètre.")
     if erreurs:
         raise ValidationError(erreurs)
+
+
+ALPHABET_CODE = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+LONGUEUR_CODE = 6
+LIMITE_ESSAIS = 10
+FENETRE_ESSAIS = 600  # secondes
+
+
+def generer_code():
+    return ''.join(secrets.choice(ALPHABET_CODE) for _ in range(LONGUEUR_CODE))
+
+
+def _normaliser(valeur):
+    if not isinstance(valeur, str):
+        return ''
+    return ''.join(valeur.split()).upper()
+
+
+def verifier_code(request, quiz):
+    """Lève 400 si le code est absent ou faux, 429 après LIMITE_ESSAIS erreurs en FENETRE_ESSAIS secondes."""
+    cle = f'code_acces:{quiz.pk}:{request.user.pk}'
+    if cache.get(cle, 0) >= LIMITE_ESSAIS:
+        raise Throttled(detail="Trop d'essais, réessayez dans quelques minutes.")
+    fourni = _normaliser(request.data.get('code') if isinstance(request.data, dict) else None)
+    if not fourni:
+        raise ValidationError({'detail': "Ce quiz demande un code d'accès."})
+    if hmac.compare_digest(fourni.encode(), quiz.code_acces.encode()):
+        return
+    cache.add(cle, 0, timeout=FENETRE_ESSAIS)
+    if cache.incr(cle) == LIMITE_ESSAIS:
+        audit_log(request, 'echec_code_acces', cible=quiz, details={'quiz': quiz.pk})
+    raise ValidationError({'detail': "Code d'accès incorrect."})
