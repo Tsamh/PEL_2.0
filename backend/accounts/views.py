@@ -17,7 +17,7 @@ from .permissions import (
     IsSuperAdmin, IsAdmin, IsGestionnaire, CanManageUser, MESSAGE_REFUS,
     peut_gerer_compte, SUPERADMIN, ADMIN, RESPONSABLE, ENSEIGNANT, ETUDIANT,
 )
-from .scoping import classes_enseignant, classes_du_perimetre, filieres_etudiant
+from .scoping import classes_enseignant, classes_du_perimetre
 from .serializers import (
     UserSerializer, UserCreateSerializer, InviteStudentSerializer,
     InviteEnseignantSerializer, InviteResponsableSerializer,
@@ -738,7 +738,8 @@ L'équipe PEL"""
             from programming.models import SoumissionDevoir
             from quiz.models import Quiz
 
-            stats['quiz_disponibles'] = Quiz.objects.filter(est_publie=True, filiere_id__in=filieres_etudiant(user)).count()
+            from quiz.acces import q_quiz_affecte
+            stats['quiz_disponibles'] = Quiz.objects.filter(est_publie=True).filter(q_quiz_affecte(user)).count()
             stats['mes_soumissions'] = SoumissionDevoir.objects.filter(etudiant=user).count()
             stats['soumissions_corrigees'] = SoumissionDevoir.objects.filter(etudiant=user, statut='corrige').count()
             if stats['mes_soumissions'] > 0:

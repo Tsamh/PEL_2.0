@@ -7,11 +7,11 @@ from rest_framework.response import Response
 
 from accounts.permissions import RolePermission, CREATEURS, TOUS_LES_ROLES, ETUDIANT, IsEtudiant
 from accounts.scoping import (
-    EtablissementScopedMixin, en_entier, filieres_etudiant, q_evaluation_etablissement,
+    EtablissementScopedMixin, en_entier, q_evaluation_etablissement,
     verifier_filiere_du_perimetre, verifier_references_evaluation,
 )
 from audit.services import log as audit_log
-from . import passage
+from . import acces, passage
 from .correction import arrondir, en_decimal, recalculer_score
 from .exceptions import Conflit, verifier_quiz_modifiable
 from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz
@@ -44,7 +44,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return qs.filter(cree_par=user)
 
     def etudiant_scope(self, qs, user):
-        return qs.filter(est_publie=True, filiere_id__in=filieres_etudiant(user))
+        return qs.filter(est_publie=True).filter(acces.q_quiz_affecte(user))
 
     def _cloturer_expirees_etudiant(self, request):
         # L'état (tentative en cours, dernière tentative) doit refléter les tentatives expirées.
