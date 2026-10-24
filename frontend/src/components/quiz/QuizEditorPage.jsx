@@ -6,6 +6,7 @@ import AffectationQuiz from './AffectationQuiz';
 import AccesQuiz from './AccesQuiz';
 import { resumeCibles } from './cibles';
 import QuestionEditeur from './QuestionEditeur';
+import SelecteurBanque from './SelecteurBanque';
 import { depuisApi, nouvelleQuestion, versContenu } from './questions';
 
 const formulaireVide = {
@@ -28,6 +29,8 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [formError, setFormError] = useState('');
+  const [formMessage, setFormMessage] = useState('');
+  const [selecteurOuvert, setSelecteurOuvert] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [form, setForm] = useState(formulaireVide);
@@ -65,6 +68,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
     setForm(formulaireVide);
     setQuestions([nouvelleQuestion()]);
     setFormError('');
+    setFormMessage('');
     setShowForm(true);
   };
 
@@ -85,10 +89,58 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
     }));
     setQuestions(chargees.length > 0 ? chargees : [nouvelleQuestion()]);
     setFormError('');
+    setFormMessage('');
     setShowForm(true);
   };
 
   const majQuestion = (idx, patch) => setQuestions((qs) => qs.map((q, i) => (i === idx ? { ...q, ...patch } : q)));
+
+  // Questions de la banque copiées dans le quiz : contenu de la version courante, lien conservé dans `source`.
+  const versQuestionLiee = (fiche) => ({
+    ...depuisApi(fiche.version), source: fiche.version.id, version_source: fiche.version.numero,
+    fiche_source: fiche.id, version_courante: fiche.version.numero, modifiee_localement: false,
+  });
+
+  const ajouterDepuisBanque = (fiches) => {
+    setQuestions((qs) => [...qs, ...fiches.map(versQuestionLiee)]);
+    setSelecteurOuvert(false);
+    setFormMessage(`${fiches.length} question(s) ajoutée(s). Elles seront enregistrées avec le quiz.`);
+  };
+
+  const mettreAJourDepuisBanque = async (idx) => {
+    setFormError('');
+    try {
+      const res = await api.get(`/quiz/banque/${questions[idx].fiche_source}/`);
+      majQuestion(idx, versQuestionLiee(res.data));
+      setFormMessage('Question mise à jour avec la dernière version de la banque. Enregistrez le quiz pour confirmer.');
+    } catch (err) {
+      setFormError(messageErreur(err, "La question d'origine n'est plus disponible dans la banque."));
+    }
+  };
+
+  const enregistrerDansBanque = async (idx) => {
+    setFormError('');
+    try {
+      const res = await api.post('/quiz/banque/', { contenu: versContenu(questions[idx]) });
+      majQuestion(idx, versQuestionLiee(res.data));
+      setFormMessage('Question enregistrée dans la banque. Enregistrez le quiz pour garder le lien.');
+    } catch (err) {
+      setFormError(messageErreur(err, "Erreur lors de l'enregistrement dans la banque."));
+    }
+  };
+
+  const actionsQuestion = (q, idx) => (
+    <>
+      {q.source && <span className="badge badge-inactive">Banque v{q.version_source}</span>}
+      {q.modifiee_localement && <span className="badge badge-pending">Modifiée localement</span>}
+      {q.source && q.version_courante > q.version_source && (
+        <button type="button" className="btn btn-sm btn-outline" onClick={() => mettreAJourDepuisBanque(idx)}>Mettre à jour (v{q.version_courante})</button>
+      )}
+      {!q.source && (
+        <button type="button" className="btn btn-sm btn-outline" onClick={() => enregistrerDansBanque(idx)}>Enregistrer dans la banque</button>
+      )}
+    </>
+  );
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -143,6 +195,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
       {error && <div className="alert alert-error">{error}</div>}
 
       {showForm && (
+        <>
         <div className="modal-overlay" onClick={() => setShowForm(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '820px', maxHeight: '90vh', overflowY: 'auto' }}>
             <div className="modal-header">
@@ -152,6 +205,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
             <form onSubmit={handleSubmit}>
               <div className="modal-body">
                 {formError && <div className="alert alert-error">{formError}</div>}
+                {formMessage && <div className="alert alert-success">{formMessage}</div>}
                 <div className="form-group">
                   <label>Titre</label>
                   <input value={form.titre} onChange={(e) => setForm({ ...form, titre: e.target.value })} required />
@@ -234,7 +288,12 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                 <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--gray-200)' }} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3 style={{ margin: 0 }}>Questions ({questions.length})</h3>
-                  {!verrouille && <button type="button" className="btn btn-sm btn-primary" onClick={() => setQuestions([...questions, nouvelleQuestion()])}>+ Ajouter</button>}
+                  {!verrouille && (
+                    <div>
+                      <button type="button" className="btn btn-sm btn-primary" onClick={() => setQuestions([...questions, nouvelleQuestion()])}>+ Ajouter</button>
+                      <button type="button" className="btn btn-sm btn-secondary" style={{ marginLeft: '8px' }} onClick={() => setSelecteurOuvert(true)}>Depuis la banque</button>
+                    </div>
+                  )}
                 </div>
 
                 {verrouille ? (
@@ -247,6 +306,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                 ) : questions.map((q, i) => (
                   <QuestionEditeur key={i} question={q} index={i}
                     onChange={(patch) => majQuestion(i, patch)}
+                    actions={actionsQuestion(q, i)}
                     onRemove={() => setQuestions(questions.filter((_, j) => j !== i))} />
                 ))}
               </div>
@@ -257,6 +317,8 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
             </form>
           </div>
         </div>
+        {selecteurOuvert && <SelecteurBanque onAjouter={ajouterDepuisBanque} onFermer={() => setSelecteurOuvert(false)} />}
+        </>
       )}
 
       <div className="table-container">
