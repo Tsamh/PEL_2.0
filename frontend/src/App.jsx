@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
@@ -29,6 +29,7 @@ import MesDevoirsRouter from './pages/MesDevoirsRouter';
 import Statistiques from './pages/teacher/Statistiques';
 import GestionNotes from './pages/teacher/GestionNotes';
 import QuizDisponibles from './pages/student/QuizDisponibles';
+import FicheQuiz from './pages/student/FicheQuiz';
 import PasserQuiz from './pages/student/PasserQuiz';
 import MesResultats from './pages/student/MesResultats';
 import MesNotes from './pages/student/MesNotes';
@@ -40,8 +41,9 @@ import './App.css';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
+  const location = useLocation();
   if (loading) return <div className="loading">Chargement</div>;
-  return user ? children : <Navigate to="/login" />;
+  return user ? children : <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
 }
 
 function PublicRoute({ children }) {
@@ -86,6 +88,7 @@ function App() {
             <Route path="gestion-notes" element={<RoleRoute roles={['enseignant']}><GestionNotes /></RoleRoute>} />
             <Route path="statistiques" element={<RoleRoute roles={['enseignant']}><Statistiques /></RoleRoute>} />
             <Route path="quiz-disponibles" element={<RoleRoute roles={['etudiant']}><QuizDisponibles /></RoleRoute>} />
+            <Route path="quiz-disponibles/quiz/:id" element={<RoleRoute roles={['etudiant']}><FicheQuiz /></RoleRoute>} />
             <Route path="quiz-disponibles/tentatives/:id" element={<RoleRoute roles={['etudiant']}><PasserQuiz /></RoleRoute>} />
             <Route path="mes-notes" element={<RoleRoute roles={['etudiant']}><MesNotes /></RoleRoute>} />
             <Route path="mes-resultats" element={<RoleRoute roles={['etudiant']}><MesResultats /></RoleRoute>} />
