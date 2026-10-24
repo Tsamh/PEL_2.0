@@ -5,7 +5,8 @@ from rest_framework import serializers
 
 from .acces import CLES_CIBLES, verifier_cibles
 from .exceptions import Conflit, MESSAGE_VERROU
-from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz
+from .banque import contenu_question, contenu_version, q_banque_visible
+from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz, QuestionBanque, VersionQuestion
 from .passage import corrige_visible, meilleure_tentative, score_visible
 
 
@@ -68,24 +69,49 @@ def verifier_penalite(attrs):
 
 class QuestionCreateSerializer(serializers.ModelSerializer):
     choix = ChoixImbriqueSerializer(many=True, required=False)
+    source = serializers.PrimaryKeyRelatedField(queryset=VersionQuestion.objects.all(), required=False, allow_null=True)
 
     class Meta:
         model = Question
-        fields = ['id', 'texte', 'type_question', 'points', 'mode_notation', 'penalite', 'explication', 'ordre', 'choix']
+        fields = ['id', 'texte', 'type_question', 'points', 'mode_notation', 'penalite', 'explication', 'source', 'ordre', 'choix']
         read_only_fields = ['id']
 
     def validate(self, attrs):
         verifier_coherence_question(attrs)
         verifier_penalite(attrs)
+        source = attrs.get('source')
+        if source is not None:
+            request = self.context.get('request')
+            if request is not None and not QuestionBanque.objects.filter(
+                q_banque_visible(request.user), pk=source.question_id,
+            ).exists():
+                raise serializers.ValidationError({'source': ["Cette version de la banque n'est pas disponible."]})
+        attrs['version_source'] = source.numero if source is not None else None
         return attrs
 
 
 class QuestionReadSerializer(serializers.ModelSerializer):
     choix = ChoixSerializer(many=True, read_only=True)
+    fiche_source = serializers.SerializerMethodField()
+    version_courante = serializers.SerializerMethodField()
+    modifiee_localement = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
         fields = '__all__'
+
+    def get_fiche_source(self, question):
+        return question.source.question_id if question.source_id else None
+
+    def get_version_courante(self, question):
+        if question.source_id is None:
+            return None
+        return max((v.numero for v in question.source.question.versions.all()), default=None)
+
+    def get_modifiee_localement(self, question):
+        if question.source_id is None:
+            return False
+        return contenu_question(question) != contenu_version(question.source)
 
 
 class ChoixEtudiantSerializer(serializers.ModelSerializer):
