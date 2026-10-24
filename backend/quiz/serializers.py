@@ -1,9 +1,11 @@
 from decimal import Decimal
 
+from django.utils import timezone
 from rest_framework import serializers
 
 from .exceptions import Conflit, MESSAGE_VERROU
-from .models import Quiz, Question, Choix
+from .models import Quiz, Question, Choix, TentativeQuiz
+from .passage import corrige_visible, meilleure_tentative, score_visible
 
 
 class ChoixSerializer(serializers.ModelSerializer):
@@ -72,10 +74,11 @@ class ChoixEtudiantSerializer(serializers.ModelSerializer):
 
 class QuestionEtudiantSerializer(serializers.ModelSerializer):
     choix = ChoixEtudiantSerializer(many=True, read_only=True)
+    est_multiple = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Question
-        fields = ['id', 'texte', 'type_question', 'points', 'ordre', 'choix']
+        fields = ['id', 'texte', 'type_question', 'points', 'ordre', 'est_multiple', 'choix']
 
 
 def _creer_questions(quiz, questions_data):
@@ -134,19 +137,102 @@ class QuizSerializer(serializers.ModelSerializer):
         return super().to_representation(instance)
 
 
+def _resultat(tentative):
+    return {'score': str(tentative.score), 'score_max': str(tentative.score_max), 'provisoire': tentative.est_provisoire}
+
+
 class QuizEtudiantSerializer(serializers.ModelSerializer):
-    """Vue étudiant : jamais de bonne réponse. La publication du corrigé arrive au sous-projet 3."""
-    questions = QuestionEtudiantSerializer(many=True, read_only=True)
+    """Vue étudiant : ni questions ni bonnes réponses. Les questions n'arrivent qu'au démarrage d'une tentative."""
     cree_par_nom = serializers.CharField(source='cree_par.get_full_name', read_only=True, default='')
     filiere_libelle = serializers.CharField(source='filiere.libelle', read_only=True, default=None)
     niveau_libelle = serializers.CharField(source='niveau.libelle', read_only=True, default=None)
     annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True, default=None)
+    nb_questions = serializers.IntegerField(source='questions.count', read_only=True)
+    etat = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'titre', 'description', 'filiere', 'filiere_libelle', 'niveau', 'niveau_libelle',
             'annee_academique', 'annee_libelle', 'duree_minutes', 'date_debut', 'date_fin',
-            'cree_par_nom', 'questions',
+            'tentatives_autorisees', 'reprise_autorisee', 'publication_resultats',
+            'cree_par_nom', 'nb_questions', 'etat',
         ]
         read_only_fields = fields
+
+    def get_etat(self, quiz):
+        etudiant = self.context['request'].user
+        tentatives = list(quiz.tentatives.filter(etudiant=etudiant).order_by('numero'))
+        en_cours = next((t for t in tentatives if t.statut == TentativeQuiz.EN_COURS), None)
+        soumises = [t for t in tentatives if t.statut == TentativeQuiz.SOUMISE]
+        meilleure = meilleure_tentative(soumises) if score_visible(quiz) else None
+        maintenant = timezone.now()
+        ouvert = (quiz.date_debut is None or quiz.date_debut <= maintenant) and (quiz.date_fin is None or maintenant < quiz.date_fin)
+        return {
+            'tentatives_utilisees': len(tentatives),
+            'tentatives_restantes': max(0, quiz.tentatives_autorisees - len(tentatives)),
+            'tentative_en_cours': en_cours.id if en_cours else None,
+            'derniere_tentative': soumises[-1].id if soumises else None,
+            'meilleure_note': _resultat(meilleure) if meilleure else None,
+            'ouvert': ouvert,
+        }
+
+
+class TentativeEtudiantSerializer(serializers.ModelSerializer):
+    quiz_titre = serializers.CharField(source='quiz.titre', read_only=True)
+    heure_serveur = serializers.SerializerMethodField()
+    questions = serializers.SerializerMethodField()
+    reponses = serializers.SerializerMethodField()
+    resultat = serializers.SerializerMethodField()
+    corrige = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TentativeQuiz
+        fields = [
+            'id', 'quiz', 'quiz_titre', 'numero', 'statut', 'debut', 'fin_prevue', 'soumise_le',
+            'soumission_auto', 'heure_serveur', 'questions', 'reponses', 'resultat', 'corrige',
+        ]
+        read_only_fields = fields
+
+    def get_heure_serveur(self, tentative):
+        return serializers.DateTimeField().to_representation(timezone.now())
+
+    def get_questions(self, tentative):
+        if tentative.statut != TentativeQuiz.EN_COURS:
+            return []
+        return QuestionEtudiantSerializer(tentative.quiz.questions.prefetch_related('choix'), many=True).data
+
+    def get_reponses(self, tentative):
+        if tentative.statut != TentativeQuiz.EN_COURS:
+            return []
+        return [
+            {'question': r.question_id, 'choix': [c.id for c in r.choix_selectionnes.all()], 'texte': r.texte_reponse}
+            for r in tentative.reponses.prefetch_related('choix_selectionnes').order_by('question__ordre', 'id')
+        ]
+
+    def get_resultat(self, tentative):
+        if tentative.statut != TentativeQuiz.SOUMISE or not score_visible(tentative.quiz):
+            return None
+        return _resultat(tentative)
+
+    def get_corrige(self, tentative):
+        if not corrige_visible(tentative):
+            return None
+        reponses = {r.question_id: r for r in tentative.reponses.prefetch_related('choix_selectionnes')}
+        corrige = []
+        for question in tentative.quiz.questions.prefetch_related('choix'):
+            reponse = reponses.get(question.id)
+            corrige.append({
+                'question': question.id,
+                'texte': question.texte,
+                'type_question': question.type_question,
+                'points': str(question.points),
+                'score_obtenu': str(reponse.score_obtenu) if reponse else '0.00',
+                'statut_correction': reponse.statut_correction if reponse else 'auto',
+                'choix': [{'id': c.id, 'texte': c.texte, 'est_correct': c.est_correct} for c in question.choix.all()],
+                'reponse': {
+                    'choix': [c.id for c in reponse.choix_selectionnes.all()] if reponse else [],
+                    'texte': reponse.texte_reponse if reponse else '',
+                },
+            })
+        return corrige

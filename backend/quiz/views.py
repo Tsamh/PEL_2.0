@@ -1,15 +1,20 @@
 from django.db import transaction
-from rest_framework import viewsets
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
-from accounts.permissions import RolePermission, CREATEURS, TOUS_LES_ROLES, ETUDIANT
+from accounts.permissions import RolePermission, CREATEURS, TOUS_LES_ROLES, ETUDIANT, IsEtudiant
 from accounts.scoping import (
     EtablissementScopedMixin, filieres_etudiant, q_evaluation_etablissement,
     verifier_filiere_du_perimetre, verifier_references_evaluation,
 )
 from audit.services import log as audit_log
-from .exceptions import verifier_quiz_modifiable
-from .models import Quiz, Question, Choix
-from .serializers import QuizSerializer, QuizEtudiantSerializer, QuestionReadSerializer, ChoixSerializer
+from . import passage
+from .exceptions import Conflit, verifier_quiz_modifiable
+from .models import Quiz, Question, Choix, TentativeQuiz
+from .serializers import (
+    QuizSerializer, QuizEtudiantSerializer, QuestionReadSerializer, ChoixSerializer, TentativeEtudiantSerializer,
+)
 
 
 def etablissement_evaluation(instance):
@@ -58,6 +63,15 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         self._journaliser('suppression_evaluation', instance)
         instance.delete()
+
+    @action(detail=True, methods=['post'], permission_classes=[IsEtudiant])
+    def demarrer(self, request, pk=None):
+        quiz = self.get_object()
+        tentative, creee = passage.demarrer(quiz, request.user)
+        if creee:
+            audit_log(request, 'demarrage_quiz', cible=tentative, details={'quiz': quiz.titre, 'numero': tentative.numero})
+        data = TentativeEtudiantSerializer(tentative, context={'request': request}).data
+        return Response(data, status=status.HTTP_201_CREATED if creee else status.HTTP_200_OK)
 
     def _journaliser(self, action, instance):
         audit_log(self.request, action, cible=instance, etablissement=etablissement_evaluation(instance),
@@ -120,3 +134,31 @@ class ChoixViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         verifier_quiz_modifiable(instance.question.quiz)
         instance.delete()
+
+
+class TentativeViewSet(viewsets.ReadOnlyModelViewSet):
+    """Tentatives de l'étudiant connecté. La tentative d'un autre étudiant renvoie 404."""
+    serializer_class = TentativeEtudiantSerializer
+    permission_classes = [IsEtudiant]
+
+    def get_queryset(self):
+        return TentativeQuiz.objects.filter(etudiant=self.request.user).select_related('quiz')
+
+    def get_object(self):
+        tentative = super().get_object()
+        passage.cloturer_si_expiree(tentative)
+        return tentative
+
+    @action(detail=True, methods=['put'])
+    def repondre(self, request, pk=None):
+        tentative = super().get_object()
+        passage.enregistrer_reponse(tentative, request.data)
+        return Response({'enregistre': True})
+
+    @action(detail=True, methods=['post'])
+    def soumettre(self, request, pk=None):
+        tentative = super().get_object()
+        if tentative.statut == TentativeQuiz.SOUMISE:
+            raise Conflit("Cette tentative est déjà soumise.")
+        passage.soumettre(tentative, auto=passage.est_expiree(tentative), request=request)
+        return Response(self.get_serializer(tentative).data)
