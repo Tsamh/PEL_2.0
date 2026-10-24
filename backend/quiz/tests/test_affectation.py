@@ -1,3 +1,5 @@
+import json
+
 from django.test import TestCase
 from django.utils import timezone
 
@@ -69,6 +71,14 @@ class VisibiliteTests(TestCase):
         nouveau = make_user('nouveau', 'etudiant', self.a.etab)
         Inscription.objects.create(etudiant=nouveau, classe=self.a.classe)
         self.assertIn(self.quiz.id, self.ids(nouveau))
+
+    def test_desinscrit_ne_voit_plus_le_quiz_du_groupe(self):
+        groupe = Groupe.objects.create(code='TD1A', libelle='TD 1', classe=self.a.classe)
+        groupe.membres.add(self.a.etu)
+        self.quiz.groupes.add(groupe)
+        self.assertIn(self.quiz.id, self.ids(self.a.etu))
+        Inscription.objects.filter(etudiant=self.a.etu, classe=self.a.classe).delete()
+        self.assert_invisible(self.a.etu)
 
     def test_non_publie_invisible(self):
         self.quiz.classes.add(self.a.classe)
@@ -150,6 +160,21 @@ class EcritureAffectationTests(TestCase):
                 self.assertEqual(res.status_code, 400)
                 self.assertIn(cle, res.data)
         self.assertFalse(self.quiz.classes.exists())
+
+    def test_aucune_fuite_entre_etablissements(self):
+        b = self.w.b
+        secrets_b = [b.classe.code, b.etu.username, b.etu.get_full_name(), b.ens.username, b.ens.get_full_name()]
+        for acteur in (self.a.ens, self.a.admin):
+            for corps in ({'classes': [b.classe.id]}, {'etudiants': [b.etu.id]}, {'etudiants': [b.ens.id]}):
+                with self.subTest(acteur=acteur.username, corps=corps):
+                    res = self.patch(acteur, corps)
+                    self.assertEqual(res.status_code, 400)
+                    texte = json.dumps(res.data, ensure_ascii=False)
+                    for secret in secrets_b:
+                        if secret:
+                            self.assertNotIn(secret, texte)
+        res = self.patch(self.a.ens, {'etudiants': [b.ens.id]})
+        self.assertNotIn("n'est pas un étudiant", json.dumps(res.data, ensure_ascii=False))
 
     def test_gestion_limitee_a_son_etablissement(self):
         self.assertEqual(self.patch(self.a.admin, {'classes': [self.classe_hors.id]}).status_code, 200)

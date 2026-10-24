@@ -18,7 +18,7 @@ def q_quiz_affecte(user):
     """Q vrai pour les quiz affectés à l'étudiant : par une de ses classes, un de ses groupes ou nominativement."""
     return (
         Q(pk__in=Quiz.objects.filter(classes__inscriptions__etudiant=user).values('pk'))
-        | Q(pk__in=Quiz.objects.filter(groupes__membres=user).values('pk'))
+        | Q(pk__in=Quiz.objects.filter(groupes__membres=user, groupes__classe__inscriptions__etudiant=user).values('pk'))
         | Q(pk__in=Quiz.objects.filter(etudiants=user).values('pk'))
     )
 
@@ -44,37 +44,36 @@ def ecart_cibles(avant, apres):
     return {'ajouts': ajouts, 'retraits': retraits}
 
 
-def _nom(user):
-    return user.get_full_name() or user.username
-
-
 def verifier_cibles(acteur, quiz, attrs):
     """Refuse (400) toute cible ajoutée hors du périmètre de l'acteur.
 
+    Les messages ne citent que l'identifiant : aucun nom, code ni rôle d'un autre établissement.
     Les cibles déjà affectées ne sont pas recontrôlées : une affectation reste valide
     si l'enseignant perd ensuite la classe.
     """
     actuelles = cibles(quiz) if quiz is not None else cibles_vides()
     nouvelles = {cle: [o for o in attrs.get(cle, []) if o.pk not in actuelles[cle]] for cle in CLES_CIBLES}
     erreurs = {}
-    for etudiant in nouvelles['etudiants']:
-        if etudiant.role != ETUDIANT:
-            erreurs.setdefault('etudiants', []).append(f"{_nom(etudiant)} n'est pas un étudiant.")
-    if acteur.role != SUPERADMIN:
+    if acteur.role == SUPERADMIN:
+        for etudiant in nouvelles['etudiants']:
+            if etudiant.role != ETUDIANT:
+                erreurs.setdefault('etudiants', []).append(f"Le compte {etudiant.pk} n'est pas un étudiant.")
+    else:
         perimetre = set(classes_du_perimetre(acteur).values_list('pk', flat=True))
         for classe in nouvelles['classes']:
             if classe.pk not in perimetre:
-                erreurs.setdefault('classes', []).append(f"La classe {classe.code} ne fait pas partie de votre périmètre.")
+                erreurs.setdefault('classes', []).append(f"La classe {classe.pk} ne fait pas partie de votre périmètre.")
         for groupe in nouvelles['groupes']:
             if groupe.classe_id not in perimetre:
-                erreurs.setdefault('groupes', []).append(f"Le groupe {groupe.code} ne fait pas partie de votre périmètre.")
-        etudiants = [e for e in nouvelles['etudiants'] if e.role == ETUDIANT]
+                erreurs.setdefault('groupes', []).append(f"Le groupe {groupe.pk} ne fait pas partie de votre périmètre.")
         inscrits = set(
-            Inscription.objects.filter(etudiant__in=etudiants, classe_id__in=perimetre).values_list('etudiant_id', flat=True)
+            Inscription.objects.filter(
+                etudiant__in=[e for e in nouvelles['etudiants'] if e.role == ETUDIANT], classe_id__in=perimetre,
+            ).values_list('etudiant_id', flat=True)
         )
-        for etudiant in etudiants:
+        for etudiant in nouvelles['etudiants']:
             if etudiant.pk not in inscrits:
-                erreurs.setdefault('etudiants', []).append(f"L'étudiant {_nom(etudiant)} ne fait pas partie de votre périmètre.")
+                erreurs.setdefault('etudiants', []).append(f"Le compte {etudiant.pk} ne fait pas partie de votre périmètre.")
     if erreurs:
         raise ValidationError(erreurs)
 

@@ -367,7 +367,7 @@ class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
 
 class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
-    queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes').order_by('id')
+    queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes__membres').order_by('id')
     serializer_class = ClasseSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
     scope_path = 'filiere__etablissement'
@@ -416,7 +416,7 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         if not isinstance(ids, list) or not ids:
             raise ValidationError({'etudiants': ["Indiquez au moins un étudiant."]})
         entiers = [en_entier(i) for i in ids]
-        if None in entiers:
+        if None in entiers or any(not 1 <= i <= 2**63 - 1 for i in entiers):
             raise ValidationError({'etudiants': ["Les identifiants d'étudiants doivent être des entiers."]})
         inscrits = set(
             User.objects.filter(pk__in=entiers, role=ETUDIANT, inscriptions__classe=groupe.classe)

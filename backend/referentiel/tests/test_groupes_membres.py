@@ -39,7 +39,8 @@ class MembresGroupeTests(TestCase):
         self.assertFalse(self.groupe.membres.exists())
 
     def test_corps_invalides(self):
-        for corps in ({}, {'etudiants': []}, {'etudiants': 'x'}, {'etudiants': [True]}, {'etudiants': ['a']}, [1]):
+        for corps in ({}, {'etudiants': []}, {'etudiants': 'x'}, {'etudiants': [True]}, {'etudiants': ['a']}, {'etudiants': [2**70]},
+                      {'etudiants': [0]}, {'etudiants': [-1]}, [1]):
             with self.subTest(corps=corps):
                 self.assertEqual(self.ajouter(self.a.admin, corps).status_code, 400)
 
