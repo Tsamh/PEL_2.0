@@ -80,10 +80,10 @@ function QuestionEditeur({ question: q, index, onChange, onRemove }) {
           </div>
           {q.choix.map((c, cIdx) => (
             <div key={cIdx} style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
-              <input type="checkbox" checked={c.est_correct} onChange={(e) => setChoix(cIdx, { est_correct: e.target.checked })} style={{ width: 'auto' }} title="Bonne réponse" />
+              <input type="checkbox" checked={parChoix ? Number(c.points) > 0 : c.est_correct} disabled={parChoix} onChange={(e) => setChoix(cIdx, { est_correct: e.target.checked })} style={{ width: 'auto' }} title={parChoix ? 'Bonne réponse : déduite des points (points supérieurs à 0)' : 'Bonne réponse'} />
               <input value={c.texte} onChange={(e) => setChoix(cIdx, { texte: e.target.value })} placeholder={`Choix ${cIdx + 1}`} style={{ flex: 1 }} required />
               {parChoix && (
-                <input type="number" step="0.25" value={c.points} onChange={(e) => setChoix(cIdx, { points: e.target.value })} style={{ width: '90px' }} title="Points de ce choix (négatif pour pénaliser)" />
+                <input type="number" step="0.25" value={c.points} onChange={(e) => setChoix(cIdx, { points: e.target.value, est_correct: Number(e.target.value) > 0 })} style={{ width: '90px' }} title="Points de ce choix (négatif pour pénaliser)" />
               )}
               {q.choix.length > 2 && (
                 <button type="button" className="btn btn-sm btn-danger" onClick={() => retirerChoix(cIdx)}>×</button>
@@ -92,7 +92,7 @@ function QuestionEditeur({ question: q, index, onChange, onRemove }) {
           ))}
           {parChoix && (
             <div style={{ fontSize: '0.85rem', color: somme === Number(q.points) ? 'var(--success, #16a34a)' : 'var(--danger, #dc2626)' }}>
-              Somme des points positifs : {somme} sur {Number(q.points) || 0}. Un choix faux peut avoir des points négatifs.
+              Somme des points positifs : {somme} sur {Number(q.points) || 0}. Un choix qui rapporte des points est une bonne réponse ; un choix faux peut avoir des points négatifs.
             </div>
           )}
         </div>
@@ -213,10 +213,13 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
     if (!verrouille) {
       payload.questions = questions.map((q, i) => ({
         texte: q.texte, type_question: q.type_question, points: q.points, mode_notation: q.mode_notation, ordre: i + 1,
-        choix: q.choix.map((c, j) => ({
-          texte: c.texte, est_correct: c.est_correct, ordre: j + 1,
-          points: q.mode_notation === 'par_choix' ? c.points || 0 : 0,
-        })),
+        choix: q.choix.map((c, j) => {
+          const parChoix = q.type_question === 'qcm' && q.mode_notation === 'par_choix';
+          return {
+            texte: c.texte, est_correct: parChoix ? Number(c.points) > 0 : c.est_correct, ordre: j + 1,
+            points: parChoix ? c.points || 0 : 0,
+          };
+        }),
       }));
     }
     try {

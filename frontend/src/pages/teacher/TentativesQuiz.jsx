@@ -52,6 +52,7 @@ export default function TentativesQuiz() {
   const [quiz, setQuiz] = useState(null);
   const [tentatives, setTentatives] = useState([]);
   const [aValider, setAValider] = useState([]);
+  const [nbAValider, setNbAValider] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -66,7 +67,9 @@ export default function TentativesQuiz() {
       ]);
       setQuiz(q.data);
       setTentatives(t.data);
-      setAValider(r.data.results || r.data);
+      const reponses = r.data.results || r.data;
+      setAValider(reponses);
+      setNbAValider(r.data.count ?? reponses.length);
     } catch (err) {
       setError(messageErreur(err, 'Erreur lors du chargement des tentatives.'));
     } finally {
@@ -105,7 +108,7 @@ export default function TentativesQuiz() {
       {error && <div className="alert alert-error">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
 
-      <h2>Réponses courtes à valider ({aValider.length})</h2>
+      <h2>Réponses courtes à valider ({nbAValider})</h2>
       <div className="table-container" style={{ marginBottom: '24px' }}>
         {aValider.length === 0 ? (
           <div className="empty-state"><p>Aucune réponse en attente de validation.</p></div>

@@ -21,6 +21,7 @@ export default function QuizDisponibles() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [demarrage, setDemarrage] = useState(null);
+  const [aConfirmer, setAConfirmer] = useState(null);
 
   useEffect(() => { fetchItems(); }, []);
 
@@ -38,6 +39,7 @@ export default function QuizDisponibles() {
   };
 
   const commencer = async (quiz) => {
+    setAConfirmer(null);
     setDemarrage(quiz.id);
     setError('');
     try {
@@ -53,8 +55,24 @@ export default function QuizDisponibles() {
 
   const action = (quiz) => {
     const { etat } = quiz;
-    if (etat.tentative_en_cours) {
+    if (etat.tentative_en_cours && quiz.reprise_autorisee) {
       return <button className="btn btn-sm btn-primary" disabled={demarrage === quiz.id} onClick={() => commencer(quiz)}>Reprendre</button>;
+    }
+    if (etat.tentative_en_cours) {
+      if (aConfirmer === quiz.id) {
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '260px' }}>
+            <span style={{ fontSize: '0.85rem' }}>
+              La reprise n'est pas autorisée pour ce quiz : votre tentative en cours sera soumise avec les réponses déjà enregistrées, puis une nouvelle tentative commencera s'il vous en reste.
+            </span>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button className="btn btn-sm btn-primary" disabled={demarrage === quiz.id} onClick={() => commencer(quiz)}>Confirmer</button>
+              <button className="btn btn-sm btn-secondary" onClick={() => setAConfirmer(null)}>Annuler</button>
+            </div>
+          </div>
+        );
+      }
+      return <button className="btn btn-sm btn-primary" onClick={() => setAConfirmer(quiz.id)}>Nouvelle tentative</button>;
     }
     if (etat.ouvert && etat.tentatives_restantes > 0) {
       return <button className="btn btn-sm btn-primary" disabled={demarrage === quiz.id} onClick={() => commencer(quiz)}>Commencer</button>;

@@ -11,7 +11,7 @@ function CorrigeQuestion({ item, index }) {
       {item.type_question === 'courte' ? (
         <div style={{ marginTop: '8px' }}>
           <div>Votre réponse : <em>{item.reponse.texte || 'aucune'}</em></div>
-          <div>Réponses acceptées : {item.choix.map((c) => c.texte).join(', ')}</div>
+          <div>Réponses acceptées : {item.choix.filter((c) => c.est_correct).map((c) => c.texte).join(', ')}</div>
         </div>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, marginTop: '8px' }}>
@@ -35,7 +35,7 @@ export default function ResultatTentative({ tentative }) {
         <p>
           Tentative n°{tentative.numero}, soumise le {formatDate(tentative.soumise_le)}
           {tentative.soumission_auto && ' (automatiquement, à la fin du temps imparti)'}.
-          Un accusé de réception vous a été envoyé par e-mail.
+          {' '}Un accusé de réception est envoyé à votre adresse e-mail si elle est renseignée.
         </p>
         {resultat ? (
           <p style={{ fontSize: '1.3rem' }}>
