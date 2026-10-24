@@ -51,16 +51,32 @@ def verifier_coherence_question(attrs):
             raise serializers.ValidationError("Une réponse courte doit avoir au moins une réponse acceptée.")
 
 
+def verifier_penalite(attrs):
+    """La pénalité reste entre 0 et les points, et seulement en QCM tout ou rien ou en vrai/faux."""
+    penalite = attrs.get('penalite', Decimal('0'))
+    if not penalite:
+        return
+    type_question = attrs.get('type_question', 'qcm')
+    mode = attrs.get('mode_notation', Question.TOUT_OU_RIEN)
+    if not (type_question == 'vf' or (type_question == 'qcm' and mode == Question.TOUT_OU_RIEN)):
+        raise serializers.ValidationError(
+            {'penalite': ["La pénalité ne s'applique qu'aux QCM en tout ou rien et aux questions vrai/faux."]}
+        )
+    if penalite > attrs.get('points', Decimal('1')):
+        raise serializers.ValidationError({'penalite': ["La pénalité ne peut pas dépasser les points de la question."]})
+
+
 class QuestionCreateSerializer(serializers.ModelSerializer):
     choix = ChoixImbriqueSerializer(many=True, required=False)
 
     class Meta:
         model = Question
-        fields = ['id', 'texte', 'type_question', 'points', 'mode_notation', 'ordre', 'choix']
+        fields = ['id', 'texte', 'type_question', 'points', 'mode_notation', 'penalite', 'explication', 'ordre', 'choix']
         read_only_fields = ['id']
 
     def validate(self, attrs):
         verifier_coherence_question(attrs)
+        verifier_penalite(attrs)
         return attrs
 
 
@@ -84,7 +100,7 @@ class QuestionEtudiantSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Question
-        fields = ['id', 'texte', 'type_question', 'points', 'ordre', 'est_multiple', 'choix']
+        fields = ['id', 'texte', 'type_question', 'points', 'penalite', 'ordre', 'est_multiple', 'choix']
 
     def get_choix(self, question):
         # Pour une réponse courte, les choix sont les réponses acceptées : ne jamais les envoyer.
@@ -268,6 +284,8 @@ class TentativeEtudiantSerializer(serializers.ModelSerializer):
                 'texte': question.texte,
                 'type_question': question.type_question,
                 'points': str(question.points),
+                'penalite': str(question.penalite),
+                'explication': question.explication,
                 'score_obtenu': str(reponse.score_obtenu) if reponse else '0.00',
                 'statut_correction': reponse.statut_correction if reponse else 'auto',
                 'choix': [{'id': c.id, 'texte': c.texte, 'est_correct': c.est_correct} for c in question.choix.all()],
