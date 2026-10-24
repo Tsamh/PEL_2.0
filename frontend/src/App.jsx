@@ -23,6 +23,7 @@ import Corrections from './pages/teacher/Corrections';
 import ForceChangePassword from './pages/ForceChangePassword';
 import MesCours from './pages/teacher/MesCours';
 import MesQuiz from './pages/teacher/MesQuiz';
+import TentativesQuiz from './pages/teacher/TentativesQuiz';
 import MesDevoirsRouter from './pages/MesDevoirsRouter';
 import Statistiques from './pages/teacher/Statistiques';
 import GestionNotes from './pages/teacher/GestionNotes';
@@ -73,6 +74,7 @@ function App() {
             <Route path="etablissements" element={<RoleRoute roles={['superadmin']}><Etablissements /></RoleRoute>} />
             <Route path="validations" element={<RoleRoute roles={['superadmin']}><Validations /></RoleRoute>} />
             <Route path="quiz" element={<RoleRoute roles={GESTION}><QuizManagement /></RoleRoute>} />
+            <Route path="quiz/:id/tentatives" element={<RoleRoute roles={[...GESTION, 'enseignant']}><TentativesQuiz /></RoleRoute>} />
             <Route path="devoirs" element={<RoleRoute roles={GESTION}><DevoirManagement /></RoleRoute>} />
             <Route path="devoirs/:id" element={<DevoirDetail />} />
             <Route path="devoirs/:id/corrections" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Corrections /></RoleRoute>} />
