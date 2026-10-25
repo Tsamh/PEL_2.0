@@ -38,6 +38,7 @@ export default function ValidationQuiz() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [enCours, setEnCours] = useState(false);
 
   const chargerFile = useCallback(async () => {
     try {
@@ -63,12 +64,15 @@ export default function ValidationQuiz() {
   const executer = async (action, succes, defaut) => {
     setError('');
     setMessage('');
+    setEnCours(true);
     try {
       await action();
       setMessage(succes);
       await chargerFile();
     } catch (err) {
       setError(messageErreur(err, defaut));
+    } finally {
+      setEnCours(false);
     }
   };
 
@@ -137,7 +141,7 @@ export default function ValidationQuiz() {
                       <td>{q.nb_cibles > 0 ? resumeCibles(q.classes_detail.length, q.groupes_detail.length, q.etudiants_detail.length) : 'Non affecté'}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>
                         <button type="button" className="btn btn-sm btn-outline" style={{ marginRight: '6px' }} onClick={() => setOuvert(ouvert === q.id ? null : q.id)}>{ouvert === q.id ? 'Masquer' : 'Aperçu'}</button>
-                        <button type="button" className="btn btn-sm btn-primary" style={{ marginRight: '6px' }} onClick={() => valider(q)}>Valider</button>
+                        <button type="button" className="btn btn-sm btn-primary" style={{ marginRight: '6px' }} disabled={enCours} onClick={() => valider(q)}>Valider</button>
                         <button type="button" className="btn btn-sm btn-danger" onClick={() => setRefus({ id: q.id, motif: '' })}>Refuser</button>
                       </td>
                     </tr>
@@ -150,7 +154,7 @@ export default function ValidationQuiz() {
                             <textarea rows={2} maxLength={2000} value={refus.motif} onChange={(e) => setRefus({ id: q.id, motif: e.target.value })} />
                           </div>
                           <div style={{ display: 'flex', gap: '6px' }}>
-                            <button type="button" className="btn btn-sm btn-danger" disabled={!refus.motif.trim()} onClick={() => refuser(q)}>Confirmer le refus</button>
+                            <button type="button" className="btn btn-sm btn-danger" disabled={enCours || !refus.motif.trim()} onClick={() => refuser(q)}>Confirmer le refus</button>
                             <button type="button" className="btn btn-sm btn-secondary" onClick={() => setRefus({ id: null, motif: '' })}>Annuler</button>
                           </div>
                         </td>

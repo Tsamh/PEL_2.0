@@ -44,6 +44,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [alerte, setAlerte] = useState('');
   const [formError, setFormError] = useState('');
   const [formMessage, setFormMessage] = useState('');
   const [selecteurOuvert, setSelecteurOuvert] = useState(false);
@@ -184,8 +185,13 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
       });
     }
     try {
+      setAlerte('');
       if (editingItem) {
-        await api.patch(`/quiz/quizzes/${editingItem.id}/`, payload);
+        const res = await api.patch(`/quiz/quizzes/${editingItem.id}/`, payload);
+        const avant = editingItem.est_publie || editingItem.statut_validation === 'validee';
+        if (avant && !res.data.est_publie && res.data.statut_validation === 'brouillon') {
+          setAlerte(`Le contenu de « ${res.data.titre} » a changé : le quiz est dépublié et doit être soumis de nouveau à la validation.`);
+        }
       } else {
         await api.post('/quiz/quizzes/', payload);
       }
@@ -216,6 +222,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}
+      {alerte && <div className="alert alert-error">{alerte}</div>}
 
       {showForm && (
         <>
