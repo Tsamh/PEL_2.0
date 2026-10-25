@@ -11,7 +11,7 @@ export default function Courbe({ valeurs, max, largeur = 90, hauteur = 28, libel
         <polyline points={points.map((p) => p.join(',')).join(' ')} fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
       )}
       {points.map(([x, y], i) => (
-        <circle key={i} cx={x} cy={y} r="3" fill="var(--primary)" stroke="#fff" strokeWidth="1.5">
+        <circle key={i} cx={x} cy={y} r="3" fill="var(--primary)" stroke="var(--white, #fff)" strokeWidth="1.5">
           <title>{libelles[i] || String(nombres[i])}</title>
         </circle>
       ))}

@@ -18,13 +18,16 @@ export default function Statistiques() {
   useEffect(() => {
     const requetes = [api.get('/quiz/quizzes/statistiques/')];
     if (enseignant) requetes.push(api.get('/accounts/users/dashboard_stats/'));
-    Promise.all(requetes)
+    Promise.allSettled(requetes)
       .then(([q, c]) => {
-        setQuiz(q.data.results);
-        setSuivant(q.data.next);
-        if (c) setCompteurs(c.data);
+        if (q.status === 'fulfilled') {
+          setQuiz(q.value.data.results);
+          setSuivant(q.value.data.next);
+        } else {
+          setError(messageErreur(q.reason, 'Erreur lors du chargement des statistiques.'));
+        }
+        if (c?.status === 'fulfilled') setCompteurs(c.value.data);
       })
-      .catch((err) => setError(messageErreur(err, 'Erreur lors du chargement des statistiques.')))
       .finally(() => setLoading(false));
   }, [enseignant]);
 
@@ -79,7 +82,7 @@ export default function Statistiques() {
                       <div style={{ fontSize: '0.8rem', color: 'var(--gray-500)' }}>{q.population.soumis} sur {q.population.concernes}</div>
                     </td>
                     <td>{q.notes.moyenne == null ? '-' : `${pourcentage(q.notes.moyenne_pourcentage)} (${nombre(q.notes.moyenne)} / ${nombre(q.notes.score_max)})`}</td>
-                    <td>{nombre(q.notes.mediane)}</td>
+                    <td>{q.notes.mediane == null ? '-' : `${nombre(q.notes.mediane)} / ${nombre(q.notes.score_max)}`}</td>
                     <td>{q.nb_a_valider > 0 ? <span className="badge badge-pending">{q.nb_a_valider}</span> : '0'}</td>
                     <td><Link className="btn btn-sm btn-outline" to={`/quiz/${q.id}/statistiques`}>Tableau de bord</Link></td>
                   </tr>

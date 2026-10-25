@@ -46,7 +46,7 @@ function DetailQuestion({ question }) {
         <p style={{ color: 'var(--gray-500)', margin: '4px 0' }}>Aucune erreur relevée.</p>
       ) : (
         <ul style={{ margin: '4px 0', paddingLeft: '18px' }}>
-          {question.erreurs_frequentes.map((e) => <li key={e.texte}>{e.texte} ({e.nb})</li>)}
+          {question.erreurs_frequentes.map((e, i) => <li key={`${e.texte}-${i}`}>{e.texte} ({e.nb})</li>)}
         </ul>
       )}
     </div>
@@ -56,15 +56,16 @@ function DetailQuestion({ question }) {
 export default function TableauBordQuiz() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [quiz, setQuiz] = useState(null);
   const [stats, setStats] = useState(null);
   const [error, setError] = useState('');
   const [ouverte, setOuverte] = useState(null);
 
   useEffect(() => {
-    Promise.all([api.get(`/quiz/quizzes/${id}/`), api.get(`/quiz/quizzes/${id}/statistiques/`)])
-      .then(([q, s]) => { setQuiz(q.data); setStats(s.data); })
-      .catch((err) => setError(messageErreur(err, 'Erreur lors du chargement des statistiques.')));
+    api.get(`/quiz/quizzes/${id}/statistiques/`)
+      .then((res) => setStats(res.data))
+      .catch((err) => setError(err.response?.status === 404
+        ? "Ce quiz n'existe pas ou ne fait pas partie de votre périmètre."
+        : messageErreur(err, 'Erreur lors du chargement des statistiques.')));
   }, [id]);
 
   if (error) return <div className="alert alert-error">{error}</div>;
@@ -75,7 +76,7 @@ export default function TableauBordQuiz() {
   return (
     <div>
       <div className="page-header" style={{ flexWrap: 'wrap', gap: '12px' }}>
-        <h1 style={{ margin: 0 }}>Statistiques : {quiz?.titre}</h1>
+        <h1 style={{ margin: 0 }}>Statistiques : {stats.titre}</h1>
         <div style={{ display: 'flex', gap: '8px' }}>
           <Link className="btn btn-outline" to={`/quiz/${id}/tentatives`}>Tentatives</Link>
           <button type="button" className="btn btn-secondary" onClick={() => navigate(-1)}>Retour</button>
@@ -96,6 +97,17 @@ export default function TableauBordQuiz() {
         {n.nb === 0 ? <p style={{ color: 'var(--gray-500)' }}>Aucune tentative soumise pour le moment.</p> : (
           <>
             <Histogramme tranches={stats.distribution} />
+            <details style={{ marginTop: '8px' }}>
+              <summary style={{ cursor: 'pointer' }}>Voir le tableau</summary>
+              <table className="data-table">
+                <thead><tr><th>Tranche</th><th>Étudiants</th></tr></thead>
+                <tbody>
+                  {stats.distribution.map((t) => (
+                    <tr key={t.de}><td>{t.de} à {t.a} %</td><td>{t.nb}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </details>
             <p style={{ fontSize: '0.85rem', color: 'var(--gray-500)', marginBottom: 0 }}>Meilleure tentative de chaque étudiant, en pourcentage de la note maximale.</p>
           </>
         )}
@@ -112,7 +124,10 @@ export default function TableauBordQuiz() {
                   <td>{i + 1}</td>
                   <td style={{ maxWidth: '320px' }}>{q.texte}</td>
                   <td>{TYPES[q.type_question]}</td>
-                  <td><Barre valeur={q.taux_reussite} libelle={`Réussite : ${pourcentage(q.taux_reussite)}`} /></td>
+                  <td>
+                    <Barre valeur={q.taux_reussite} libelle={`Réussite : ${pourcentage(q.taux_reussite)}`} />
+                    {q.nb_a_valider > 0 && <div style={{ fontSize: '0.8rem', color: 'var(--gray-500)' }}>dont {q.nb_a_valider} à valider</div>}
+                  </td>
                   <td>{nombre(q.score_moyen)} / {nombre(q.points)}</td>
                   <td>{q.nb_sans_reponse}</td>
                   <td><button type="button" className="btn btn-sm btn-secondary" onClick={() => setOuverte(ouverte === q.id ? null : q.id)}>{ouverte === q.id ? 'Masquer' : 'Détail'}</button></td>
