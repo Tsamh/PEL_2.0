@@ -85,7 +85,8 @@ export default function SessionsQuiz({ quiz }) {
   };
 
   return (
-    <div>
+    // Rendu dans le formulaire du quiz : Entrée ne doit pas enregistrer le quiz depuis un champ de session.
+    <div onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}>
       <h3 style={{ margin: '0 0 8px' }}>Sessions</h3>
       <p style={{ fontSize: '0.85rem', color: 'var(--gray-500)', margin: '0 0 12px' }}>
         Sans session, les dates générales du quiz s'appliquent. Une session donne des dates propres à des classes ou groupes affectés ; un rattrapage rouvre le quiz pour des étudiants choisis.
