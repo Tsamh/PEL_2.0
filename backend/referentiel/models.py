@@ -10,6 +10,7 @@ class Etablissement(models.Model):
     email = models.EmailField(blank=True)
     site_web = models.URLField(blank=True)
     logo = models.ImageField(upload_to='logos/', blank=True, null=True)
+    validation_quiz_requise = models.BooleanField(default=False)
     date_creation = models.DateField(auto_now_add=True)
 
     class Meta:

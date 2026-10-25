@@ -3,7 +3,7 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
-from . import fenetres
+from . import fenetres, validation
 from .acces import CLES_CIBLES, verifier_cibles
 from .exceptions import Conflit, MESSAGE_VERROU
 from .banque import contenu_question, contenu_version, q_banque_visible
@@ -169,11 +169,21 @@ class QuizSerializer(serializers.ModelSerializer):
     groupes_detail = serializers.SerializerMethodField()
     etudiants_detail = serializers.SerializerMethodField()
     nb_cibles = serializers.SerializerMethodField()
+    validation_requise = serializers.SerializerMethodField()
+    valide_par_nom = serializers.SerializerMethodField()
 
     class Meta:
         model = Quiz
         fields = '__all__'
-        read_only_fields = ['cree_par', 'code_acces']
+        read_only_fields = ['cree_par', 'code_acces', 'statut_validation', 'motif_refus', 'soumis_le',
+                            'valide_par', 'valide_le']
+
+    def get_validation_requise(self, quiz):
+        return validation.validation_requise(quiz.etablissement)
+
+    def get_valide_par_nom(self, quiz):
+        u = quiz.valide_par
+        return (u.get_full_name() or u.username) if u else ''
 
     def get_a_des_tentatives(self, quiz):
         return quiz.tentatives.exists()
@@ -198,6 +208,7 @@ class QuizSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         if request is not None:
             verifier_cibles(request.user, self.instance, attrs)
+            validation.appliquer_regles(request.user, self.instance, attrs)
         return attrs
 
     def create(self, validated_data):
