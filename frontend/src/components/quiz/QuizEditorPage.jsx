@@ -14,7 +14,7 @@ import StatutValidation from './StatutValidation';
 import { useAuth } from '../../context/AuthContext';
 
 const formulaireVide = {
-  titre: '', description: '', filiere: '', niveau: '', annee_academique: '', periode: '',
+  titre: '', description: '', filiere: '', niveau: '', annee_academique: '', periode: '', ec: '',
   duree_minutes: 30, date_debut: '', date_fin: '', est_publie: false,
   tentatives_autorisees: 1, reprise_autorisee: true, publication_resultats: 'immediate', afficher_corrige: false,
   classes: [], groupes: [], etudiants: [],
@@ -56,6 +56,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
   const [niveaux, setNiveaux] = useState([]);
   const [annees, setAnnees] = useState([]);
   const [periodes, setPeriodes] = useState([]);
+  const [ecs, setEcs] = useState([]);
   const [saving, setSaving] = useState(false);
   const { user } = useAuth();
   const [validationRequise, setValidationRequise] = useState(false);
@@ -72,6 +73,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
     ]).then(([f, n, a]) => { setFilieres(liste(f)); setNiveaux(liste(n)); setAnnees(liste(a)); })
       .catch(() => setError('Erreur lors du chargement des listes de référence.'));
     chargerTout('/referentiel/periodes-evaluation/').then(setPeriodes).catch(() => setError('Erreur lors du chargement des périodes.'));
+    chargerTout('/referentiel/ecs/').then(setEcs).catch(() => setError('Erreur lors du chargement des matières.'));
   }, []);
 
   const fetchItems = async () => {
@@ -99,7 +101,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
     setEditingItem(item);
     setForm({
       titre: item.titre, description: item.description || '',
-      filiere: item.filiere || '', niveau: item.niveau || '', annee_academique: item.annee_academique || '', periode: item.periode || '',
+      filiere: item.filiere || '', niveau: item.niveau || '', annee_academique: item.annee_academique || '', periode: item.periode || '', ec: item.ec || '',
       duree_minutes: item.duree_minutes, date_debut: versChampLocal(item.date_debut), date_fin: versChampLocal(item.date_fin),
       est_publie: item.est_publie, tentatives_autorisees: item.tentatives_autorisees,
       reprise_autorisee: item.reprise_autorisee, publication_resultats: item.publication_resultats,
@@ -175,6 +177,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
       niveau: form.niveau || null,
       annee_academique: form.annee_academique || null,
       periode: form.periode || null,
+      ec: form.ec || null,
       date_debut: form.date_debut ? new Date(form.date_debut).toISOString() : null,
       date_fin: form.date_fin ? new Date(form.date_fin).toISOString() : null,
     };
@@ -280,6 +283,14 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                       <option value="">-- Aucune --</option>
                       {periodes.map((p) => <option key={p.id} value={p.id}>{p.semestre_libelle} : {p.libelle}</option>)}
                     </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Matière</label>
+                    <select value={form.ec} onChange={(e) => setForm({ ...form, ec: e.target.value })}>
+                      <option value="">-- Aucune --</option>
+                      {ecs.map((m) => <option key={m.id} value={m.id}>{m.ue_libelle} : {m.libelle}</option>)}
+                    </select>
+                    {!form.ec && <small style={{ color: 'var(--gray-500)' }}>Recommandé : la matière sert aux synthèses par UE et par matière du suivi global.</small>}
                   </div>
                 </div>
                 <div className="form-row">
