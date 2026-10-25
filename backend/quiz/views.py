@@ -11,7 +11,7 @@ from accounts.scoping import (
     verifier_filiere_du_perimetre, verifier_references_evaluation,
 )
 from audit.services import log as audit_log
-from . import acces, passage
+from . import acces, passage, statistiques as stats
 from .correction import arrondir, en_decimal, recalculer_score
 from .exceptions import Conflit, verifier_quiz_modifiable
 from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz
@@ -139,6 +139,20 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         audit_log(request, 'code_acces_quiz', cible=quiz, etablissement=etablissement_evaluation(quiz),
                   details={'action': 'genere'})
         return Response({'code_acces': quiz.code_acces})
+
+    @action(detail=True, methods=['get'], permission_classes=[RolePermission(read=CREATEURS)])
+    def statistiques(self, request, pk=None):
+        quiz = self.get_object()
+        passage.cloturer_expirees(quiz.tentatives.all())
+        return Response(stats.statistiques_quiz(quiz))
+
+    @action(detail=False, methods=['get'], url_path='statistiques', url_name='vue-ensemble',
+            permission_classes=[RolePermission(read=CREATEURS)])
+    def vue_ensemble(self, request):
+        page = self.paginate_queryset(
+            stats.quizzes_du_perimetre(request.user).prefetch_related('questions').order_by('-date_creation', '-id'))
+        passage.cloturer_expirees(TentativeQuiz.objects.filter(quiz__in=[q.pk for q in page]))
+        return self.get_paginated_response([stats.resume_quiz(q) for q in page])
 
     def _journaliser(self, action, instance):
         audit_log(self.request, action, cible=instance, etablissement=etablissement_evaluation(instance),

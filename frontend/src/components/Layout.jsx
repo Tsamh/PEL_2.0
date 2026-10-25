@@ -20,6 +20,7 @@ const adminMenu = [
   { path: '/enseignants', label: 'Enseignants' },
   { path: '/quiz', label: 'Quiz' },
   { path: '/banque', label: 'Banque de questions' },
+  { path: '/statistiques', label: 'Statistiques des quiz' },
   { path: '/devoirs', label: 'Devoirs de programmation' },
 ];
 

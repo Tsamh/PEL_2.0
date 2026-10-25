@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { messageErreur } from '../../services/erreurs';
 
@@ -101,6 +101,7 @@ export default function TentativesQuiz() {
           {quiz?.publication_resultats === 'differee' && !quiz.resultats_publies && (
             <button type="button" className="btn btn-primary" onClick={publier}>Publier les résultats</button>
           )}
+          <Link className="btn btn-outline" to={`/quiz/${id}/statistiques`}>Statistiques</Link>
           <button type="button" className="btn btn-secondary" onClick={() => navigate(-1)}>Retour</button>
         </div>
       </div>

@@ -353,6 +353,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{ marginRight: '8px' }}>Modifier</button>
                     <Link className="btn btn-sm btn-outline" to={`/quiz/${item.id}/tentatives`} style={{ marginRight: '8px' }}>Tentatives</Link>
+                    <Link className="btn btn-sm btn-outline" to={`/quiz/${item.id}/statistiques`} style={{ marginRight: '8px' }}>Statistiques</Link>
                     <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>
                   </td>
                 </tr>
