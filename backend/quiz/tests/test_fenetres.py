@@ -1,5 +1,4 @@
 from datetime import timedelta
-from decimal import Decimal
 
 from django.test import TestCase
 from django.utils import timezone
@@ -103,6 +102,22 @@ class FenetresTests(TestCase):
         self.assertEqual(res.status_code, 201)
         self.assertEqual(res.data['numero'], 2)
         self.assertEqual(self.etat(self.etu2)['tentatives_max'], 1)
+
+    def test_rattrapage_futur_n_ajoute_pas_de_tentative(self):
+        self.soumise(self.a.etu, self.mauvais)
+        self.session(timedelta(days=1), timedelta(days=2), type_session=SessionQuiz.RATTRAPAGE, etudiants=[self.a.etu])
+        res = self.demarrer(self.a.etu)
+        self.assertEqual(res.status_code, 409)
+        self.assertIn('plus de tentative', str(res.data))
+        etat = self.etat(self.a.etu)
+        self.assertEqual(etat['tentatives_max'], 1)
+        self.assertIsNotNone(etat['fenetre']['prochaine_ouverture'])
+
+    def test_rattrapage_termine_n_ajoute_pas_de_tentative(self):
+        self.soumise(self.a.etu, self.mauvais)
+        self.session(-timedelta(days=2), -timedelta(days=1), type_session=SessionQuiz.RATTRAPAGE, etudiants=[self.a.etu])
+        self.assertEqual(self.etat(self.a.etu)['tentatives_max'], 1)
+        self.assertEqual(self.demarrer(self.a.etu).status_code, 409)
 
     def test_rattrapage_futur_quand_le_quiz_est_ferme(self):
         self.quiz.date_fin = self.maintenant - timedelta(hours=1)

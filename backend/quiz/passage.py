@@ -12,8 +12,8 @@ from rest_framework.exceptions import ValidationError
 from accounts.scoping import en_entier
 from audit.services import log as audit_log
 
-from .correction import corriger_tentative
 from . import fenetres
+from .correction import corriger_tentative
 from .exceptions import Conflit
 from .models import Quiz, ReponseQuiz, TentativeQuiz
 
@@ -199,10 +199,11 @@ def corrige_visible(tentative):
     quiz = tentative.quiz
     if tentative.statut != TentativeQuiz.SOUMISE or not quiz.afficher_corrige or not score_visible(quiz):
         return False
-    fenetre = fenetres.fenetre(quiz, tentative.etudiant)
+    fenetre = fenetres.fenetre(quiz, tentative.etudiant_id)
     if fenetre.terminee:
         return True
-    return quiz.tentatives.filter(etudiant_id=tentative.etudiant_id).count() >= fenetre.tentatives_max
+    utilisees = quiz.tentatives.filter(etudiant_id=tentative.etudiant_id).count()
+    return utilisees >= fenetre.tentatives_max and not fenetre.rattrapage_a_venir
 
 
 def meilleure_tentative(tentatives):

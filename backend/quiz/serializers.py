@@ -3,9 +3,9 @@ from decimal import Decimal
 from django.utils import timezone
 from rest_framework import serializers
 
+from . import fenetres
 from .acces import CLES_CIBLES, verifier_cibles
 from .exceptions import Conflit, MESSAGE_VERROU
-from . import fenetres
 from .banque import contenu_question, contenu_version, q_banque_visible
 from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz, QuestionBanque, VersionQuestion
 from .passage import corrige_visible, meilleure_tentative, score_visible

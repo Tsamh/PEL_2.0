@@ -16,6 +16,7 @@ class Fenetre:
     intervalles: list
     tentatives_max: int
     maintenant: datetime
+    rattrapage_a_venir: bool = False
 
     def _contient(self, intervalle):
         debut, fin = intervalle
@@ -66,5 +67,8 @@ def fenetre(quiz, etudiant, maintenant=None):
     normales, rattrapages = _sessions_applicables(quiz, etudiant)
     intervalles = [(s.ouverture, s.fermeture) for s in normales] or [(quiz.date_debut, quiz.date_fin)]
     intervalles += [(s.ouverture, s.fermeture) for s in rattrapages]
-    bonus = sum(s.tentatives_supplementaires for s in rattrapages)
-    return Fenetre(intervalles=intervalles, tentatives_max=quiz.tentatives_autorisees + bonus, maintenant=maintenant)
+    # Les tentatives supplémentaires ne servent que pendant que leur rattrapage est ouvert.
+    bonus = sum(s.tentatives_supplementaires for s in rattrapages if s.ouverture <= maintenant < s.fermeture)
+    a_venir = any(s.ouverture > maintenant for s in rattrapages)
+    return Fenetre(intervalles=intervalles, tentatives_max=quiz.tentatives_autorisees + bonus,
+                   maintenant=maintenant, rattrapage_a_venir=a_venir)
