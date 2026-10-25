@@ -12,6 +12,7 @@ from rest_framework.exceptions import ValidationError
 from accounts.scoping import en_entier
 from audit.services import log as audit_log
 
+from . import fenetres
 from .correction import corriger_tentative
 from .exceptions import Conflit
 from .models import Quiz, ReponseQuiz, TentativeQuiz
@@ -22,10 +23,12 @@ TOLERANCE = timedelta(seconds=30)
 TEXTE_MAX = 5000
 
 
-def calculer_fin_prevue(quiz, debut):
+def calculer_fin_prevue(quiz, debut, fermeture=None):
+    """Début + durée du quiz, plafonné à `fermeture` (par défaut la fermeture générale du quiz)."""
     fin = debut + timedelta(minutes=quiz.duree_minutes)
-    if quiz.date_fin and quiz.date_fin < fin:
-        return quiz.date_fin
+    limite = fermeture if fermeture is not None else quiz.date_fin
+    if limite and limite < fin:
+        return limite
     return fin
 
 
@@ -48,10 +51,10 @@ def demarrer(quiz, etudiant):
         soumettre(en_cours, auto=True)
 
     maintenant = timezone.now()
-    if quiz.date_debut and maintenant < quiz.date_debut:
-        raise Conflit("Ce quiz n'est pas encore ouvert.")
-    if quiz.date_fin and maintenant >= quiz.date_fin:
-        raise Conflit("Ce quiz est fermé.")
+    fenetre = fenetres.fenetre(quiz, etudiant, maintenant)
+    ouverte = fenetre.ouverte
+    if ouverte is None:
+        raise Conflit("Ce quiz n'est pas encore ouvert." if fenetre.prochaine_ouverture else "Ce quiz est fermé.")
 
     with transaction.atomic():
         # Verrou sur l'étudiant : deux démarrages simultanés ne créent pas deux tentatives.
@@ -60,11 +63,11 @@ def demarrer(quiz, etudiant):
         if concurrente is not None:
             return concurrente, False
         nombre = quiz.tentatives.filter(etudiant=etudiant).count()
-        if nombre >= quiz.tentatives_autorisees:
+        if nombre >= fenetre.tentatives_max:
             raise Conflit("Vous n'avez plus de tentative disponible pour ce quiz.")
         tentative = TentativeQuiz.objects.create(
             quiz=quiz, etudiant=etudiant, numero=nombre + 1,
-            debut=maintenant, fin_prevue=calculer_fin_prevue(quiz, maintenant),
+            debut=maintenant, fin_prevue=calculer_fin_prevue(quiz, maintenant, ouverte[1]),
         )
     return tentative, True
 
@@ -196,9 +199,11 @@ def corrige_visible(tentative):
     quiz = tentative.quiz
     if tentative.statut != TentativeQuiz.SOUMISE or not quiz.afficher_corrige or not score_visible(quiz):
         return False
-    if quiz.date_fin is not None and timezone.now() >= quiz.date_fin:
+    fenetre = fenetres.fenetre(quiz, tentative.etudiant_id)
+    if fenetre.terminee:
         return True
-    return quiz.tentatives.filter(etudiant_id=tentative.etudiant_id).count() >= quiz.tentatives_autorisees
+    utilisees = quiz.tentatives.filter(etudiant_id=tentative.etudiant_id).count()
+    return utilisees >= fenetre.tentatives_max and not fenetre.rattrapage_a_venir
 
 
 def meilleure_tentative(tentatives):

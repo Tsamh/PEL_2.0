@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import api from '../../services/api';
 import { messageErreur } from '../../services/erreurs';
-import { fenetre, formatNote } from './quizAffichage';
+import { fenetre, formatNote, prochaineOuverture } from './quizAffichage';
 
 export default function FicheQuiz() {
   const { id } = useParams();
@@ -79,10 +79,10 @@ export default function FicheQuiz() {
         {quiz.description && <p style={{ marginTop: 0 }}>{quiz.description}</p>}
         <table className="data-table">
           <tbody>
-            <tr><th>Disponibilité</th><td>{fenetre(quiz)}</td></tr>
+            <tr><th>Disponibilité</th><td>{fenetre(quiz)}{prochaineOuverture(quiz) && <div style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>{prochaineOuverture(quiz)}</div>}</td></tr>
             <tr><th>Durée</th><td>{quiz.duree_minutes} min</td></tr>
             <tr><th>Questions</th><td>{quiz.nb_questions}</td></tr>
-            <tr><th>Tentatives</th><td>{etat.tentatives_utilisees} / {quiz.tentatives_autorisees}</td></tr>
+            <tr><th>Tentatives</th><td>{etat.tentatives_utilisees} / {etat.tentatives_max ?? quiz.tentatives_autorisees}{etat.tentatives_max > quiz.tentatives_autorisees && <span className="badge badge-pending" style={{ marginLeft: '6px' }}>Rattrapage</span>}</td></tr>
             <tr><th>Meilleure note</th><td>{formatNote(etat.meilleure_note)}</td></tr>
           </tbody>
         </table>

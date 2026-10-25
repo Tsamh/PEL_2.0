@@ -8,6 +8,7 @@ import RegisterAdmin from './pages/RegisterAdmin';
 import RegisterSuccess from './pages/RegisterSuccess';
 import Dashboard from './pages/Dashboard';
 import AnneesAcademiques from './pages/AnneesAcademiques';
+import Calendrier from './pages/Calendrier';
 import Filieres from './pages/Filieres';
 import Niveaux from './pages/Niveaux';
 import UEList from './pages/UEList';
@@ -37,6 +38,7 @@ import PasserQuiz from './pages/student/PasserQuiz';
 import MesResultats from './pages/student/MesResultats';
 import MesNotes from './pages/student/MesNotes';
 import Layout from './components/Layout';
+import Planning from './pages/teacher/Planning';
 import RoleRoute, { ADMINS, GESTION } from './components/RoleRoute';
 import Responsables from './pages/admin/Responsables';
 import JournalAudit from './pages/admin/JournalAudit';
@@ -69,6 +71,7 @@ function App() {
           <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="annees-academiques" element={<RoleRoute roles={GESTION}><AnneesAcademiques /></RoleRoute>} />
+            <Route path="calendrier" element={<RoleRoute roles={GESTION}><Calendrier /></RoleRoute>} />
             <Route path="filieres" element={<RoleRoute roles={GESTION}><Filieres /></RoleRoute>} />
             <Route path="niveaux" element={<RoleRoute roles={GESTION}><Niveaux /></RoleRoute>} />
             <Route path="ues" element={<RoleRoute roles={GESTION}><UEList /></RoleRoute>} />
@@ -93,6 +96,7 @@ function App() {
             <Route path="mes-devoirs" element={<RoleRoute roles={['enseignant', 'etudiant']}><MesDevoirsRouter /></RoleRoute>} />
             <Route path="gestion-notes" element={<RoleRoute roles={['enseignant']}><GestionNotes /></RoleRoute>} />
             <Route path="statistiques" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Statistiques /></RoleRoute>} />
+            <Route path="planning" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Planning /></RoleRoute>} />
             <Route path="quiz-disponibles" element={<RoleRoute roles={['etudiant']}><QuizDisponibles /></RoleRoute>} />
             <Route path="quiz-disponibles/quiz/:id" element={<RoleRoute roles={['etudiant']}><FicheQuiz /></RoleRoute>} />
             <Route path="quiz-disponibles/tentatives/:id" element={<RoleRoute roles={['etudiant']}><PasserQuiz /></RoleRoute>} />

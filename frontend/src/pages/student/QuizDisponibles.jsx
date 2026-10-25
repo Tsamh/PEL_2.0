@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../services/api';
 import { messageErreur } from '../../services/erreurs';
-import { fenetre, formatNote } from './quizAffichage';
+import { fenetre, formatNote, prochaineOuverture } from './quizAffichage';
 
 function libelleAction(quiz) {
   if (quiz.etat.tentative_en_cours) return quiz.reprise_autorisee ? 'Reprendre' : 'Ouvrir';
@@ -52,10 +52,10 @@ export default function QuizDisponibles() {
                     {quiz.code_requis && <span className="badge badge-pending" style={{ marginLeft: '6px' }}>Code requis</span>}
                     {quiz.description && <div style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>{quiz.description}</div>}
                   </td>
-                  <td>{fenetre(quiz)}</td>
+                  <td>{fenetre(quiz)}{prochaineOuverture(quiz) && <div style={{ fontSize: '0.8rem', color: 'var(--gray-500)' }}>{prochaineOuverture(quiz)}</div>}</td>
                   <td>{quiz.duree_minutes} min</td>
                   <td>{quiz.nb_questions}</td>
-                  <td>{quiz.etat.tentatives_utilisees} / {quiz.tentatives_autorisees}</td>
+                  <td>{quiz.etat.tentatives_utilisees} / {quiz.etat.tentatives_max ?? quiz.tentatives_autorisees}</td>
                   <td>{formatNote(quiz.etat.meilleure_note)}</td>
                   <td><Link className="btn btn-sm btn-primary" to={`/quiz-disponibles/quiz/${quiz.id}`}>{libelleAction(quiz)}</Link></td>
                 </tr>

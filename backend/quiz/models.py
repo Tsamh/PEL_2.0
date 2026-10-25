@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import F
 from django.db.models.functions import Lower
@@ -51,6 +51,8 @@ class Quiz(models.Model):
     filiere = models.ForeignKey('referentiel.Filiere', on_delete=models.CASCADE, related_name='quizzes', null=True, blank=True)
     niveau = models.ForeignKey('referentiel.Niveau', on_delete=models.SET_NULL, null=True, blank=True)
     annee_academique = models.ForeignKey('referentiel.AnneeAcademique', on_delete=models.SET_NULL, null=True, blank=True)
+    periode = models.ForeignKey('referentiel.PeriodeEvaluation', on_delete=models.SET_NULL, null=True, blank=True,
+                                related_name='quizzes')
     duree_minutes = models.PositiveIntegerField(default=30, validators=[MinValueValidator(1)])
     date_debut = models.DateTimeField(null=True, blank=True)
     date_fin = models.DateTimeField(null=True, blank=True)
@@ -288,3 +290,36 @@ class VersionQuestion(models.Model):
 
     def __str__(self):
         return f"{self.question} v{self.numero}"
+
+
+class SessionQuiz(models.Model):
+    NORMALE = 'normale'
+    RATTRAPAGE = 'rattrapage'
+    TYPE_CHOICES = [(NORMALE, 'Session'), (RATTRAPAGE, 'Rattrapage')]
+
+    quiz = models.ForeignKey(Quiz, on_delete=models.CASCADE, related_name='sessions')
+    type = models.CharField(max_length=12, choices=TYPE_CHOICES, default=NORMALE)
+    libelle = models.CharField(max_length=100, blank=True, default='')
+    ouverture = models.DateTimeField()
+    fermeture = models.DateTimeField()
+    periode = models.ForeignKey('referentiel.PeriodeEvaluation', on_delete=models.SET_NULL, null=True, blank=True,
+                                related_name='sessions_quiz')
+    classes = models.ManyToManyField('referentiel.Classe', related_name='sessions_quiz', blank=True)
+    groupes = models.ManyToManyField('referentiel.Groupe', related_name='sessions_quiz', blank=True)
+    etudiants = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='sessions_rattrapage', blank=True)
+    tentatives_supplementaires = models.PositiveSmallIntegerField(default=1, validators=[MaxValueValidator(10)])
+    cree_par = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+                                 related_name='sessions_quiz_creees')
+    date_creation = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Session de quiz"
+        verbose_name_plural = "Sessions de quiz"
+        ordering = ['ouverture', 'id']
+
+    def __str__(self):
+        return f"{self.quiz} : {self.libelle or self.get_type_display()}"
+
+    @property
+    def etablissement(self):
+        return self.quiz.etablissement

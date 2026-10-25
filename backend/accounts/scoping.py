@@ -84,7 +84,7 @@ def verifier_filiere_du_perimetre(acteur, filiere):
 
 
 def verifier_references_evaluation(acteur, data):
-    """Refuse une année ou une matière (EC) hors de l'établissement de l'acteur dans le corps d'une évaluation.
+    """Refuse une année, une période ou une matière (EC) hors de l'établissement de l'acteur dans le corps d'une évaluation.
 
     Le niveau est global : aucun contrôle. Les clés absentes sont tolérées.
     """
@@ -92,6 +92,11 @@ def verifier_references_evaluation(acteur, data):
         return
     annee = data.get('annee_academique')
     if annee is not None and (not acteur.etablissement_id or annee.etablissement_id != acteur.etablissement_id):
+        raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
+    periode = data.get('periode')
+    if periode is not None and (
+        not acteur.etablissement_id or periode.semestre.annee_academique.etablissement_id != acteur.etablissement_id
+    ):
         raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
     ec = data.get('ec')
     if ec is not None:
