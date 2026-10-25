@@ -6,7 +6,7 @@ from django.core.mail import send_mail
 from django.conf import settings
 from .models import (
     Etablissement, AnneeAcademique, Filiere, Niveau, UE, EC, Cours,
-    Classe, Groupe, Inscription, EnseignantMatiere
+    Classe, Groupe, Inscription, EnseignantMatiere, Semestre, PeriodeEvaluation
 )
 
 User = get_user_model()
@@ -165,3 +165,39 @@ class EnseignantMatiereSerializer(serializers.ModelSerializer):
     class Meta:
         model = EnseignantMatiere
         fields = '__all__'
+
+
+def _verifier_bornes(attrs, instance, parent_cle, message_parent):
+    """Début avant fin, et dates dans celles du parent (année ou semestre)."""
+    def valeur(cle):
+        return attrs.get(cle, getattr(instance, cle, None))
+    debut, fin, parent = valeur('date_debut'), valeur('date_fin'), valeur(parent_cle)
+    if debut and fin and debut > fin:
+        raise serializers.ValidationError({'date_fin': ["La date de fin doit suivre la date de début."]})
+    if parent and debut and fin and (debut < parent.date_debut or fin > parent.date_fin):
+        raise serializers.ValidationError({'date_debut': [message_parent]})
+
+
+class SemestreSerializer(serializers.ModelSerializer):
+    annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True)
+
+    class Meta:
+        model = Semestre
+        fields = '__all__'
+
+    def validate(self, attrs):
+        _verifier_bornes(attrs, self.instance, 'annee_academique', "Le semestre doit tenir dans les dates de l'année académique.")
+        return attrs
+
+
+class PeriodeEvaluationSerializer(serializers.ModelSerializer):
+    semestre_libelle = serializers.CharField(source='semestre.libelle', read_only=True)
+    annee_academique = serializers.IntegerField(source='semestre.annee_academique_id', read_only=True)
+
+    class Meta:
+        model = PeriodeEvaluation
+        fields = '__all__'
+
+    def validate(self, attrs):
+        _verifier_bornes(attrs, self.instance, 'semestre', "La période doit tenir dans les dates du semestre.")
+        return attrs

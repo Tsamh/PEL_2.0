@@ -4,7 +4,7 @@ from .views import (
     EtablissementViewSet, AnneeAcademiqueViewSet, FiliereViewSet, NiveauViewSet,
     UEViewSet, ECViewSet, CoursViewSet,
     ClasseViewSet, GroupeViewSet, InscriptionViewSet,
-    EnseignantMatiereViewSet
+    EnseignantMatiereViewSet, SemestreViewSet, PeriodeEvaluationViewSet
 )
 
 router = DefaultRouter()
@@ -19,6 +19,8 @@ router.register(r'classes', ClasseViewSet)
 router.register(r'groupes', GroupeViewSet)
 router.register(r'inscriptions', InscriptionViewSet)
 router.register(r'enseignants-matieres', EnseignantMatiereViewSet)
+router.register(r'semestres', SemestreViewSet)
+router.register(r'periodes-evaluation', PeriodeEvaluationViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),

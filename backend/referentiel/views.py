@@ -20,14 +20,14 @@ from accounts.scoping import (
 from audit.services import log as audit_log
 from .models import (
     Etablissement, AnneeAcademique, Filiere, Niveau, UE, EC, Cours,
-    Classe, Groupe, Inscription, EnseignantMatiere, AffectationEnseignant
+    Classe, Groupe, Inscription, EnseignantMatiere, AffectationEnseignant, Semestre, PeriodeEvaluation
 )
 from .serializers import (
     EtablissementSerializer, CreateEtablissementSerializer, InviteAdminSerializer,
     AnneeAcademiqueSerializer, CreateAnneeWithFiliereSerializer, FiliereSerializer, NiveauSerializer,
     UESerializer, ECSerializer, CoursSerializer,
     ClasseSerializer, GroupeSerializer, InscriptionSerializer,
-    EnseignantMatiereSerializer
+    EnseignantMatiereSerializer, SemestreSerializer, PeriodeEvaluationSerializer
 )
 
 User = get_user_model()
@@ -513,3 +513,68 @@ class EnseignantMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         audit_log(self.request, 'retrait_affectation', cible=instance.enseignant, etablissement=instance.classe.filiere.etablissement,
                   details={'type': 'enseignant_matiere', 'ec': instance.ec_id, 'classe': instance.classe_id})
         instance.delete()
+
+
+def _identifiant(params, cle):
+    valeur = en_entier(params.get(cle))
+    return valeur if valeur is not None and 1 <= valeur <= 2 ** 63 - 1 else None
+
+
+class SemestreViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+    queryset = Semestre.objects.select_related('annee_academique').order_by('date_debut', 'id')
+    serializer_class = SemestreSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'annee_academique__etablissement'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        annee = _identifiant(self.request.query_params, 'annee_academique')
+        return qs.filter(annee_academique_id=annee) if annee else qs
+
+    def enseignant_scope(self, qs, user):
+        return qs.filter(annee_academique__etablissement_id=user.etablissement_id)
+
+    etudiant_scope = enseignant_scope
+
+    def perform_create(self, serializer, **kwargs):
+        verifier_references_evaluation(self.request.user, serializer.validated_data)
+        return super().perform_create(serializer, **kwargs)
+
+    def perform_update(self, serializer, **kwargs):
+        verifier_references_evaluation(self.request.user, serializer.validated_data)
+        return super().perform_update(serializer, **kwargs)
+
+
+class PeriodeEvaluationViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+    queryset = PeriodeEvaluation.objects.select_related('semestre', 'semestre__annee_academique').order_by('date_debut', 'id')
+    serializer_class = PeriodeEvaluationSerializer
+    permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    scope_path = 'semestre__annee_academique__etablissement'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        semestre = _identifiant(self.request.query_params, 'semestre')
+        annee = _identifiant(self.request.query_params, 'annee_academique')
+        if semestre:
+            qs = qs.filter(semestre_id=semestre)
+        if annee:
+            qs = qs.filter(semestre__annee_academique_id=annee)
+        return qs
+
+    def enseignant_scope(self, qs, user):
+        return qs.filter(semestre__annee_academique__etablissement_id=user.etablissement_id)
+
+    etudiant_scope = enseignant_scope
+
+    def _verifier(self, serializer):
+        semestre = serializer.validated_data.get('semestre')
+        if semestre is not None:
+            verifier_references_evaluation(self.request.user, {'annee_academique': semestre.annee_academique})
+
+    def perform_create(self, serializer, **kwargs):
+        self._verifier(serializer)
+        return super().perform_create(serializer, **kwargs)
+
+    def perform_update(self, serializer, **kwargs):
+        self._verifier(serializer)
+        return super().perform_update(serializer, **kwargs)

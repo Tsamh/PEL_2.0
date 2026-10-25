@@ -178,3 +178,40 @@ class AffectationEnseignant(models.Model):
 
     def __str__(self):
         return f"{self.enseignant} -> {self.classe}"
+
+
+class Semestre(models.Model):
+    annee_academique = models.ForeignKey(AnneeAcademique, on_delete=models.CASCADE, related_name='semestres')
+    libelle = models.CharField(max_length=50)
+    date_debut = models.DateField()
+    date_fin = models.DateField()
+
+    class Meta:
+        verbose_name = "Semestre"
+        verbose_name_plural = "Semestres"
+        ordering = ['date_debut', 'id']
+        unique_together = ['annee_academique', 'libelle']
+
+    def __str__(self):
+        return f"{self.libelle} ({self.annee_academique})"
+
+
+class PeriodeEvaluation(models.Model):
+    CONTROLE_CONTINU = 'controle_continu'
+    EXAMEN = 'examen'
+    RATTRAPAGE = 'rattrapage'
+    TYPE_CHOICES = [(CONTROLE_CONTINU, 'Contrôle continu'), (EXAMEN, 'Examen'), (RATTRAPAGE, 'Rattrapage')]
+
+    semestre = models.ForeignKey(Semestre, on_delete=models.CASCADE, related_name='periodes')
+    libelle = models.CharField(max_length=100)
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=CONTROLE_CONTINU)
+    date_debut = models.DateField()
+    date_fin = models.DateField()
+
+    class Meta:
+        verbose_name = "Période d'évaluation"
+        verbose_name_plural = "Périodes d'évaluation"
+        ordering = ['date_debut', 'id']
+
+    def __str__(self):
+        return self.libelle

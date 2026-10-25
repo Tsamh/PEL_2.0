@@ -162,6 +162,7 @@ class QuizSerializer(serializers.ModelSerializer):
     filiere_libelle = serializers.CharField(source='filiere.libelle', read_only=True, default=None)
     niveau_libelle = serializers.CharField(source='niveau.libelle', read_only=True, default=None)
     annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True, default=None)
+    periode_libelle = serializers.CharField(source='periode.libelle', read_only=True, default=None)
     a_des_tentatives = serializers.SerializerMethodField()
     classes_detail = serializers.SerializerMethodField()
     groupes_detail = serializers.SerializerMethodField()
