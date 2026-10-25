@@ -29,7 +29,8 @@ def etablissement_evaluation(instance):
 
 class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = (
-        Quiz.objects.select_related('filiere__etablissement', 'niveau', 'annee_academique', 'cree_par__etablissement', 'valide_par')
+        Quiz.objects.select_related('filiere__etablissement', 'niveau', 'annee_academique', 'cree_par__etablissement', 'valide_par',
+                        'periode', 'ec')
         .prefetch_related('classes', 'groupes__classe', 'etudiants', 'questions__choix',
                           'questions__source__question__versions')
     )

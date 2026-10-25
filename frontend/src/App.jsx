@@ -40,6 +40,7 @@ import MesResultats from './pages/student/MesResultats';
 import MesNotes from './pages/student/MesNotes';
 import Layout from './components/Layout';
 import Planning from './pages/teacher/Planning';
+import SuiviGlobal from './pages/teacher/SuiviGlobal';
 import RoleRoute, { ADMINS, GESTION } from './components/RoleRoute';
 import Responsables from './pages/admin/Responsables';
 import JournalAudit from './pages/admin/JournalAudit';
@@ -99,6 +100,7 @@ function App() {
             <Route path="gestion-notes" element={<RoleRoute roles={['enseignant']}><GestionNotes /></RoleRoute>} />
             <Route path="statistiques" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Statistiques /></RoleRoute>} />
             <Route path="planning" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Planning /></RoleRoute>} />
+            <Route path="suivi" element={<RoleRoute roles={[...GESTION, 'enseignant']}><SuiviGlobal /></RoleRoute>} />
             <Route path="quiz-disponibles" element={<RoleRoute roles={['etudiant']}><QuizDisponibles /></RoleRoute>} />
             <Route path="quiz-disponibles/quiz/:id" element={<RoleRoute roles={['etudiant']}><FicheQuiz /></RoleRoute>} />
             <Route path="quiz-disponibles/tentatives/:id" element={<RoleRoute roles={['etudiant']}><PasserQuiz /></RoleRoute>} />

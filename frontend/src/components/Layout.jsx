@@ -24,6 +24,7 @@ const adminMenu = [
   { path: '/banque', label: 'Banque de questions' },
   { path: '/statistiques', label: 'Statistiques des quiz' },
   { path: '/planning', label: 'Planning des évaluations' },
+  { path: '/suivi', label: 'Suivi global' },
   { path: '/devoirs', label: 'Devoirs de programmation' },
 ];
 
@@ -39,6 +40,7 @@ const teacherMenu = [
   { path: '/gestion-notes', label: 'Gestion des notes' },
   { section: 'Résultats' },
   { path: '/statistiques', label: 'Statistiques' },
+  { path: '/suivi', label: 'Suivi global' },
 ];
 
 const studentMenu = [
