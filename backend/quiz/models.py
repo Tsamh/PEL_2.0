@@ -45,6 +45,16 @@ class Quiz(models.Model):
         (PUBLICATION_IMMEDIATE, 'Immédiate'),
         (PUBLICATION_DIFFEREE, 'Différée'),
     ]
+    BROUILLON = 'brouillon'
+    EN_ATTENTE = 'en_attente'
+    VALIDEE = 'validee'
+    REFUSEE = 'refusee'
+    STATUT_VALIDATION_CHOICES = [
+        (BROUILLON, 'Brouillon'),
+        (EN_ATTENTE, 'En attente de validation'),
+        (VALIDEE, 'Validé'),
+        (REFUSEE, 'Refusé'),
+    ]
 
     titre = models.CharField(max_length=200)
     description = models.TextField(blank=True)
@@ -62,6 +72,12 @@ class Quiz(models.Model):
     publication_resultats = models.CharField(max_length=10, choices=PUBLICATION_CHOICES, default=PUBLICATION_IMMEDIATE)
     resultats_publies = models.BooleanField(default=False)
     afficher_corrige = models.BooleanField(default=False)
+    statut_validation = models.CharField(max_length=12, choices=STATUT_VALIDATION_CHOICES, default=BROUILLON)
+    motif_refus = models.TextField(blank=True, default='')
+    soumis_le = models.DateTimeField(null=True, blank=True)
+    valide_par = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+                                   related_name='quizzes_valides')
+    valide_le = models.DateTimeField(null=True, blank=True)
     classes = models.ManyToManyField('referentiel.Classe', related_name='quizzes_affectes', blank=True)
     groupes = models.ManyToManyField('referentiel.Groupe', related_name='quizzes_affectes', blank=True)
     etudiants = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name='quizzes_affectes', blank=True)

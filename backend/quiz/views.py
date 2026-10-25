@@ -5,13 +5,13 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from accounts.permissions import RolePermission, CREATEURS, TOUS_LES_ROLES, ETUDIANT, IsEtudiant
+from accounts.permissions import RolePermission, CREATEURS, GESTION, TOUS_LES_ROLES, ETUDIANT, IsEtudiant
 from accounts.scoping import (
     EtablissementScopedMixin, en_entier, q_evaluation_etablissement,
     verifier_filiere_du_perimetre, verifier_references_evaluation,
 )
 from audit.services import log as audit_log
-from . import acces, passage, statistiques as stats
+from . import acces, passage, statistiques as stats, validation
 from .correction import arrondir, en_decimal, recalculer_score
 from .exceptions import Conflit, verifier_quiz_modifiable
 from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz
@@ -29,7 +29,7 @@ def etablissement_evaluation(instance):
 
 class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = (
-        Quiz.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par')
+        Quiz.objects.select_related('filiere__etablissement', 'niveau', 'annee_academique', 'cree_par__etablissement', 'valide_par')
         .prefetch_related('classes', 'groupes__classe', 'etudiants', 'questions__choix',
                           'questions__source__question__versions')
     )
@@ -49,6 +49,37 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def etudiant_scope(self, qs, user):
         return qs.filter(est_publie=True).filter(acces.q_quiz_affecte(user))
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        statut = self.request.query_params.get('statut_validation')
+        if statut in dict(Quiz.STATUT_VALIDATION_CHOICES):
+            qs = qs.filter(statut_validation=statut)
+        return qs
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=CREATEURS)])
+    def soumettre_validation(self, request, pk=None):
+        quiz = self.get_object()
+        validation.soumettre(quiz, request)
+        return Response(self.get_serializer(quiz).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=GESTION)])
+    def valider(self, request, pk=None):
+        quiz = self.get_object()
+        validation.valider(quiz, request)
+        return Response(self.get_serializer(quiz).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=GESTION)])
+    def refuser(self, request, pk=None):
+        quiz = self.get_object()
+        motif = request.data.get('motif') if isinstance(request.data, dict) else None
+        validation.refuser(quiz, request, motif)
+        return Response(self.get_serializer(quiz).data)
+
+    @action(detail=False, methods=['get'], url_path='validation', url_name='validation',
+            permission_classes=[RolePermission(read=CREATEURS)])
+    def parametres_validation(self, request):
+        return Response({'validation_requise': validation.validation_requise(request.user.etablissement)})
 
     def _cloturer_expirees_etudiant(self, request):
         # L'état (tentative en cours, dernière tentative) doit refléter les tentatives expirées.
@@ -189,18 +220,25 @@ class QuestionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         with transaction.atomic():
             instance = super().perform_create(serializer, **kwargs)
             verifier_quiz_modifiable(instance.quiz)
+            validation.contenu_change_hors_formulaire(instance.quiz, self.request.user)
         return instance
 
     def perform_update(self, serializer, **kwargs):
-        verifier_quiz_modifiable(serializer.instance.quiz)
+        ancien = serializer.instance.quiz
+        verifier_quiz_modifiable(ancien)
         with transaction.atomic():
             instance = super().perform_update(serializer, **kwargs)
             verifier_quiz_modifiable(instance.quiz)
+            for quiz in {ancien.pk: ancien, instance.quiz.pk: instance.quiz}.values():
+                validation.contenu_change_hors_formulaire(quiz, self.request.user)
         return instance
 
     def perform_destroy(self, instance):
-        verifier_quiz_modifiable(instance.quiz)
-        instance.delete()
+        quiz = instance.quiz
+        verifier_quiz_modifiable(quiz)
+        with transaction.atomic():
+            instance.delete()
+            validation.contenu_change_hors_formulaire(quiz, self.request.user)
 
 
 class ChoixViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
@@ -218,18 +256,25 @@ class ChoixViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         with transaction.atomic():
             instance = super().perform_create(serializer, **kwargs)
             verifier_quiz_modifiable(instance.question.quiz)
+            validation.contenu_change_hors_formulaire(instance.question.quiz, self.request.user)
         return instance
 
     def perform_update(self, serializer, **kwargs):
-        verifier_quiz_modifiable(serializer.instance.question.quiz)
+        ancien = serializer.instance.question.quiz
+        verifier_quiz_modifiable(ancien)
         with transaction.atomic():
             instance = super().perform_update(serializer, **kwargs)
             verifier_quiz_modifiable(instance.question.quiz)
+            for quiz in {ancien.pk: ancien, instance.question.quiz.pk: instance.question.quiz}.values():
+                validation.contenu_change_hors_formulaire(quiz, self.request.user)
         return instance
 
     def perform_destroy(self, instance):
-        verifier_quiz_modifiable(instance.question.quiz)
-        instance.delete()
+        quiz = instance.question.quiz
+        verifier_quiz_modifiable(quiz)
+        with transaction.atomic():
+            instance.delete()
+            validation.contenu_change_hors_formulaire(quiz, self.request.user)
 
 
 class TentativeViewSet(viewsets.ReadOnlyModelViewSet):
