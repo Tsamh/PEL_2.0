@@ -34,6 +34,10 @@ class AuditLog(models.Model):
         ('archivage_question_banque', 'Archivage de question (banque)'),
         ('import_banque', 'Import de la banque de questions'),
         ('session_quiz', 'Session de quiz'),
+        ('soumission_validation', 'Soumission pour validation'),
+        ('validation_quiz', 'Validation de quiz'),
+        ('refus_quiz', 'Refus de quiz'),
+        ('parametres_etablissement', "Paramètres de l'établissement"),
     ]
 
     acteur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='actions_auditees')

@@ -1,9 +1,11 @@
 import importlib
 
 from django.apps import apps
+from django.core import mail
 from django.test import TestCase
 
 from accounts.testing import build_world, client_for
+from audit.models import AuditLog
 from quiz.models import Quiz
 
 Q = '/api/quiz/quizzes'
@@ -116,3 +118,98 @@ class ReglesPublicationTests(Base):
         migration.marquer_publies_valides(apps, None)
         self.assertEqual(Quiz.objects.get(pk=self.a.quiz.pk).statut_validation, Quiz.VALIDEE)
         self.assertEqual(Quiz.objects.get(pk=brouillon.pk).statut_validation, Quiz.BROUILLON)
+
+
+class CircuitTests(Base):
+    def action(self, quiz_id, nom, client=None, corps=None):
+        return (client or self.ens).post(f'{Q}/{quiz_id}/{nom}/', corps or {}, format='json')
+
+    def test_soumission_puis_validation(self):
+        self.activer()
+        quiz_id = self.creer().data['id']
+        res = self.action(quiz_id, 'soumettre_validation')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(res.data['statut_validation'], 'en_attente')
+        self.assertIsNotNone(res.data['soumis_le'])
+        self.assertEqual([m.to for m in mail.outbox], [[self.a.resp.email]])
+        self.assertTrue(AuditLog.objects.filter(action='soumission_validation', cible_id=str(quiz_id)).exists())
+        self.assertEqual(self.action(quiz_id, 'soumettre_validation').status_code, 409)
+        self.assertEqual(self.action(quiz_id, 'valider').status_code, 403)
+        self.assertEqual(self.action(quiz_id, 'valider', client_for(self.w.b.resp)).status_code, 404)
+        self.assertEqual(self.action(quiz_id, 'valider', client_for(self.a.etu)).status_code, 403)
+        res = self.action(quiz_id, 'valider', self.resp)
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual((res.data['statut_validation'], res.data['est_publie']), ('validee', True))
+        self.assertEqual(res.data['valide_par'], self.a.resp.id)
+        self.assertEqual(mail.outbox[-1].to, [self.a.ens.email])
+        self.assertTrue(AuditLog.objects.filter(action='validation_quiz', cible_id=str(quiz_id)).exists())
+        self.assertEqual(self.action(quiz_id, 'valider', self.resp).status_code, 409)
+        self.assertEqual(self.action(quiz_id, 'soumettre_validation').status_code, 409)
+
+    def test_refus_puis_nouvelle_soumission(self):
+        self.activer()
+        quiz_id = self.creer().data['id']
+        self.action(quiz_id, 'soumettre_validation')
+        for corps in ({}, {'motif': '   '}, {'motif': 'x' * 2001}, {'motif': 5}):
+            with self.subTest(corps=corps):
+                self.assertEqual(self.action(quiz_id, 'refuser', self.resp, corps).status_code, 400)
+        res = self.action(quiz_id, 'refuser', self.resp, {'motif': 'Les questions sont trop faciles.'})
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual((res.data['statut_validation'], res.data['est_publie']), ('refusee', False))
+        self.assertEqual(res.data['motif_refus'], 'Les questions sont trop faciles.')
+        self.assertIn('Les questions sont trop faciles.', mail.outbox[-1].body)
+        log = AuditLog.objects.get(action='refus_quiz', cible_id=str(quiz_id))
+        self.assertEqual(log.details['motif'], 'Les questions sont trop faciles.')
+        self.assertEqual(self.action(quiz_id, 'refuser', self.resp, {'motif': 'Encore'}).status_code, 409)
+        res = self.action(quiz_id, 'soumettre_validation')
+        self.assertEqual((res.status_code, res.data['statut_validation'], res.data['motif_refus']), (200, 'en_attente', ''))
+
+    def test_soumissions_refusees(self):
+        quiz_id = self.creer().data['id']
+        self.assertEqual(self.action(quiz_id, 'soumettre_validation').status_code, 409)
+        self.activer()
+        vide = self.creer(questions=[]).data['id']
+        self.assertEqual(self.action(vide, 'soumettre_validation').status_code, 400)
+        self.assertEqual(self.action(quiz_id, 'soumettre_validation', client_for(self.w.b.ens)).status_code, 404)
+        self.assertEqual(self.action(quiz_id, 'soumettre_validation', client_for(self.a.etu)).status_code, 403)
+
+    def test_file_d_attente(self):
+        self.activer()
+        attente = self.creer().data['id']
+        self.creer()
+        self.action(attente, 'soumettre_validation')
+        res = self.resp.get(f'{Q}/?statut_validation=en_attente')
+        self.assertEqual([q['id'] for q in res.data['results']], [attente])
+        self.assertGreater(len(self.resp.get(f'{Q}/?statut_validation=inconnu').data['results']), 1)
+        self.assertEqual(client_for(self.w.b.resp).get(f'{Q}/?statut_validation=en_attente').data['results'], [])
+
+    def test_reglage_visible_par_les_createurs(self):
+        self.assertEqual(self.ens.get(f'{Q}/validation/').data, {'validation_requise': False})
+        self.activer()
+        self.assertEqual(self.ens.get(f'{Q}/validation/').data, {'validation_requise': True})
+        self.assertEqual(client_for(self.a.etu).get(f'{Q}/validation/').status_code, 403)
+
+
+class ParametresTests(Base):
+    def url(self, etablissement=None):
+        return f'/api/referentiel/etablissements/{(etablissement or self.a.etab).id}/parametres/'
+
+    def test_admin_active_le_reglage(self):
+        res = client_for(self.a.admin).patch(self.url(), {'validation_quiz_requise': True}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertTrue(res.data['validation_quiz_requise'])
+        self.a.etab.refresh_from_db()
+        self.assertTrue(self.a.etab.validation_quiz_requise)
+        self.assertTrue(AuditLog.objects.filter(action='parametres_etablissement').exists())
+        self.assertEqual(client_for(self.w.superadmin).patch(self.url(), {'validation_quiz_requise': False},
+                                                             format='json').status_code, 200)
+
+    def test_droits_et_valeurs(self):
+        self.assertEqual(self.resp.patch(self.url(), {'validation_quiz_requise': True}, format='json').status_code, 403)
+        self.assertEqual(self.ens.patch(self.url(), {'validation_quiz_requise': True}, format='json').status_code, 403)
+        self.assertEqual(client_for(self.w.b.admin).patch(self.url(), {'validation_quiz_requise': True},
+                                                          format='json').status_code, 404)
+        for corps in ({'validation_quiz_requise': 'oui'}, {}, [1]):
+            with self.subTest(corps=corps):
+                self.assertEqual(client_for(self.a.admin).patch(self.url(), corps, format='json').status_code, 400)
+        self.assertIn('validation_quiz_requise', self.resp.get(f'/api/referentiel/etablissements/{self.a.etab.id}/').data)
