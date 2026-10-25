@@ -42,12 +42,15 @@ class SuiviEvaluationsView(APIView):
 
 
 class SuiviAbsencesView(APIView):
-    """Absents et retardataires d'un quiz du périmètre."""
+    """Absents et retardataires d'un quiz du périmètre ; `classe`, `regroupement` et `groupe` limitent les lignes."""
     permission_classes = [RolePermission(read=CREATEURS)]
 
     def get(self, request):
         pk = en_entier(request.query_params.get('quiz'))
         if pk is None:
             raise ValidationError({'quiz': ["Indiquez le quiz."]})
-        quiz = get_object_or_404(suivi.quizzes_suivis(request.user, {}), pk=pk)
-        return Response(suivi.absences(_contexte(request, suivi.quizzes_suivis(request.user, {}).filter(pk=pk)), quiz))
+        groupe = request.query_params.get('groupe')
+        regroupement = _regroupement(request) if groupe else None
+        qs = suivi.quizzes_suivis(request.user, {})
+        quiz = get_object_or_404(qs, pk=pk)
+        return Response(suivi.absences(_contexte(request, qs.filter(pk=pk)), quiz, regroupement, groupe))

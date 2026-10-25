@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from rest_framework.exceptions import ValidationError
 
 from accounts.scoping import (
@@ -96,3 +96,12 @@ class HelpersTests(TestCase):
             with self.subTest(role=acteur.role):
                 with self.assertRaises(ValidationError):
                     verifier_filiere_du_perimetre(acteur, b.filiere)
+
+
+class EnEntierBornesTests(SimpleTestCase):
+    def test_au_dela_de_la_borne_sqlite(self):
+        from accounts.scoping import en_entier
+        self.assertIsNone(en_entier('9' * 20))
+        self.assertIsNone(en_entier(2 ** 63))
+        self.assertEqual(en_entier(str(2 ** 63 - 1)), 2 ** 63 - 1)
+        self.assertEqual(en_entier('12'), 12)

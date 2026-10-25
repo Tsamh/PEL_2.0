@@ -61,14 +61,18 @@ def verifier_compte_du_perimetre(acteur, compte, role):
         raise ValidationError({'detail': MESSAGE_HORS_PERIMETRE})
 
 
+MAX_ENTIER = 2 ** 63 - 1  # borne des entiers SQLite et PostgreSQL (bigint)
+
+
 def en_entier(valeur):
-    """Entier lu depuis une valeur de requête (int ou chaîne de chiffres ASCII), sinon None. Les booléens sont refusés."""
+    """Entier lu depuis une valeur de requête (int ou chaîne de chiffres ASCII), sinon None.
+    Les booléens et les valeurs au-delà de MAX_ENTIER sont refusés (elles feraient échouer la requête SQL)."""
     if isinstance(valeur, bool):
         return None
-    if isinstance(valeur, int):
-        return valeur
     if isinstance(valeur, str) and valeur.isascii() and valeur.isdecimal():
-        return int(valeur)
+        valeur = int(valeur)
+    if isinstance(valeur, int) and valeur <= MAX_ENTIER:
+        return valeur
     return None
 
 

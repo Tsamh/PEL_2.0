@@ -238,8 +238,12 @@ def evaluations(contexte, regroupement, groupe=None):
     return sorted(resultat, key=lambda e: (e['titre'].lower(), e['quiz']))
 
 
-def absences(contexte, quiz):
+def absences(contexte, quiz, regroupement=None, groupe=None):
+    """Absents et retardataires du quiz ; avec regroupement et groupe, seules les lignes de ce groupe (comme `_cles`)."""
     lignes = [l for l in contexte.lignes if l.quiz.pk == quiz.pk]
+    if groupe:
+        regroupement = regroupement or 'classe'
+        lignes = [l for l in lignes if groupe in {cle for cle, _ in _cles(l, regroupement, contexte.classes)}]
 
     def personne(ligne):
         return {'id': ligne.etudiant.pk, 'nom': _nom(ligne.etudiant),

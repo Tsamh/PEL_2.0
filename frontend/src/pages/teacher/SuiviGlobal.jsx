@@ -92,6 +92,10 @@ export default function SuiviGlobal() {
     try {
       const p = { quiz: e.quiz };
       if (filtres.classe) p.classe = filtres.classe;
+      if (groupe) {
+        p.regroupement = regroupement;
+        p.groupe = groupe.cle;
+      }
       const res = await api.get('/quiz/suivi/absences/', { params: p });
       setDetail(res.data);
     } catch (err) {

@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from accounts.testing import build_world, client_for, make_user
 from quiz.models import Quiz, TentativeQuiz
-from referentiel.models import Inscription
+from referentiel.models import Classe, Inscription
 
 Q = '/api/quiz'
 
@@ -112,3 +112,58 @@ class SuiviApiTests(TestCase):
         self.assertEqual(self.get(autre, 'absences/', quiz=str(self.quiz.pk)).status_code, 404)
         self.assertEqual(self.get(self.a.ens, regroupement='classe').data['total']['nb_evaluations'], 2)
         self.assertEqual(self.get(self.w.b.admin, regroupement='classe').data['total']['nb_evaluations'], 1)
+
+    def _quiz_deux_classes(self):
+        """Quiz fermé affecté aux classes A et B (un absent dans chacune) et à un étudiant nominatif absent."""
+        a = self.a
+        classe_b = Classe.objects.create(code='L1A2', libelle='L1 Info A2', filiere=a.filiere,
+                                         niveau=self.w.niveau, annee_academique=a.annee)
+        etu_b = make_user('etub', 'etudiant', a.etab, first_name='Awa', last_name='Fall')
+        Inscription.objects.create(etudiant=etu_b, classe=classe_b)
+        nominatif = make_user('etun', 'etudiant', a.etab, first_name='Zane', last_name='Sow')
+        maintenant = timezone.now()
+        quiz = Quiz.objects.create(titre='Quiz AB', filiere=a.filiere, niveau=self.w.niveau,
+                                   annee_academique=a.annee, est_publie=True, cree_par=a.ens,
+                                   date_debut=maintenant - timedelta(days=3), date_fin=maintenant - timedelta(days=1))
+        quiz.classes.add(a.classe, classe_b)
+        quiz.etudiants.add(nominatif)
+        return quiz, classe_b, etu_b, nominatif
+
+    def test_absences_limitees_au_groupe_classe(self):
+        quiz, classe_b, etu_b, _ = self._quiz_deux_classes()
+        tous = self.get(self.a.admin, 'absences/', quiz=str(quiz.pk))
+        self.assertGreater(len(tous.data['absents']), 2)
+        for classe, attendu in ((self.a.classe, {self.a.etu.pk, self.etu2.pk, self.etu3.pk}), (classe_b, {etu_b.pk})):
+            with self.subTest(classe=classe.code):
+                groupe = str(classe.pk)
+                res = self.get(self.a.admin, 'absences/', quiz=str(quiz.pk), regroupement='classe', groupe=groupe)
+                self.assertEqual(res.status_code, 200, res.data)
+                self.assertEqual({p['id'] for p in res.data['absents']}, attendu)
+                ev = self.get(self.a.admin, 'evaluations/', regroupement='classe', groupe=groupe)
+                ligne, = [e for e in ev.data if e['quiz'] == quiz.pk]
+                self.assertEqual(len(res.data['absents']), ligne['absents'])
+                self.assertEqual(len(res.data['retards']), ligne['retards'])
+
+    def test_absences_sans_classe(self):
+        quiz, _, _, nominatif = self._quiz_deux_classes()
+        res = self.get(self.a.admin, 'absences/', quiz=str(quiz.pk), regroupement='classe', groupe='aucun')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual([p['id'] for p in res.data['absents']], [nominatif.pk])
+
+    def test_absences_sans_regroupement_explicite_filtre_groupe_par_classe(self):
+        quiz, classe_b, etu_b, _ = self._quiz_deux_classes()
+        res = self.get(self.a.admin, 'absences/', quiz=str(quiz.pk), groupe=str(classe_b.pk))
+        self.assertEqual([p['id'] for p in res.data['absents']], [etu_b.pk])
+
+    def test_regroupement_inconnu_sur_detail(self):
+        self.assertEqual(self.get(self.a.admin, 'absences/', quiz=str(self.quiz.pk), groupe='1', regroupement='pays').status_code, 400)
+        self.assertEqual(self.get(self.a.admin, 'evaluations/', regroupement='pays').status_code, 400)
+
+    def test_identifiant_trop_grand(self):
+        grand = '99999999999999999999'
+        for chemin, params in (('', {'classe': grand}), ('', {'annee': grand}), ('', {'ec': grand}),
+                               ('evaluations/', {'classe': grand}),
+                               ('absences/', {'quiz': str(self.quiz.pk), 'classe': grand})):
+            with self.subTest(chemin=chemin, params=params):
+                self.assertEqual(self.get(self.a.admin, chemin, **params).status_code, 200)
+        self.assertIn(self.get(self.a.admin, 'absences/', quiz=grand).status_code, (400, 404))
