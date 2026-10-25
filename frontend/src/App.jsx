@@ -19,6 +19,7 @@ import Enseignants from './pages/admin/Enseignants';
 import Etablissements from './pages/admin/Etablissements';
 import Validations from './pages/admin/Validations';
 import QuizManagement from './pages/admin/QuizManagement';
+import ValidationQuiz from './pages/admin/ValidationQuiz';
 import DevoirManagement from './pages/admin/DevoirManagement';
 import DevoirDetail from './pages/student/DevoirDetail';
 import Corrections from './pages/teacher/Corrections';
@@ -84,6 +85,7 @@ function App() {
             <Route path="etablissements" element={<RoleRoute roles={['superadmin']}><Etablissements /></RoleRoute>} />
             <Route path="validations" element={<RoleRoute roles={['superadmin']}><Validations /></RoleRoute>} />
             <Route path="quiz" element={<RoleRoute roles={GESTION}><QuizManagement /></RoleRoute>} />
+            <Route path="validation-quiz" element={<RoleRoute roles={GESTION}><ValidationQuiz /></RoleRoute>} />
             <Route path="quiz/:id/tentatives" element={<RoleRoute roles={[...GESTION, 'enseignant']}><TentativesQuiz /></RoleRoute>} />
             <Route path="quiz/:id/statistiques" element={<RoleRoute roles={[...GESTION, 'enseignant']}><TableauBordQuiz /></RoleRoute>} />
             <Route path="etudiants/:id/resultats" element={<RoleRoute roles={[...GESTION, 'enseignant']}><FicheEtudiant /></RoleRoute>} />
