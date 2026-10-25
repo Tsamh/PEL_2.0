@@ -5,6 +5,7 @@ import { messageErreur } from '../../services/erreurs';
 import { chargerTout } from '../../services/pagination';
 import AffectationQuiz from './AffectationQuiz';
 import AccesQuiz from './AccesQuiz';
+import SessionsQuiz from './SessionsQuiz';
 import { resumeCibles } from './cibles';
 import QuestionEditeur from './QuestionEditeur';
 import SelecteurBanque from './SelecteurBanque';
@@ -297,6 +298,8 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                 ) : (
                   <p style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>Enregistrez le quiz pour générer un code d'accès et copier son lien.</p>
                 )}
+                <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--gray-200)' }} />
+                {editingItem ? <SessionsQuiz quiz={editingItem} /> : <p style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>Enregistrez le quiz pour planifier des sessions.</p>}
 
                 <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--gray-200)' }} />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>

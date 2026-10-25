@@ -22,6 +22,7 @@ const adminMenu = [
   { path: '/quiz', label: 'Quiz' },
   { path: '/banque', label: 'Banque de questions' },
   { path: '/statistiques', label: 'Statistiques des quiz' },
+  { path: '/planning', label: 'Planning des évaluations' },
   { path: '/devoirs', label: 'Devoirs de programmation' },
 ];
 
@@ -31,6 +32,7 @@ const teacherMenu = [
   { path: '/mes-cours', label: 'Mes cours' },
   { path: '/mes-quiz', label: 'Mes quiz' },
   { path: '/banque', label: 'Banque de questions' },
+  { path: '/planning', label: 'Planning' },
   { path: '/mes-devoirs', label: 'Mes devoirs' },
   { section: 'Notes' },
   { path: '/gestion-notes', label: 'Gestion des notes' },
