@@ -18,6 +18,7 @@ class EtablissementSerializer(serializers.ModelSerializer):
     class Meta:
         model = Etablissement
         fields = '__all__'
+        read_only_fields = ['validation_quiz_requise']  # modifié seulement par l'action `parametres`, avec audit
 
     def get_admin_nom(self, obj):
         admin = User.objects.filter(etablissement=obj, role='admin').first()

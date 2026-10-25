@@ -65,18 +65,43 @@ def appliquer_regles(acteur, instance, attrs):
     """Règles de publication appliquées à `attrs` avant l'enregistrement d'un quiz (création ou modification)."""
     if acteur.role in ROLES_GESTION:
         if attrs.get('est_publie') is True:
+            if instance is None or instance.statut_validation != Quiz.VALIDEE:
+                attrs['valide_par'] = acteur
+                attrs['valide_le'] = timezone.now()
+                attrs['motif_refus'] = ''
             attrs['statut_validation'] = Quiz.VALIDEE
         return
-    if not validation_requise(etablissement_du_quiz(acteur, instance, attrs)):
-        return
+    requise = validation_requise(etablissement_du_quiz(acteur, instance, attrs))
     statut = instance.statut_validation if instance is not None else Quiz.BROUILLON
-    if statut in (Quiz.VALIDEE, Quiz.EN_ATTENTE) and contenu_modifie(instance, attrs):
-        # Un quiz validé ou en attente dont le contenu change repart en brouillon, dépublié.
-        attrs['statut_validation'] = Quiz.BROUILLON
-        attrs['est_publie'] = False
+    if contenu_modifie(instance, attrs):
+        # Un contenu modifié fait perdre la validation, avec ou sans réglage ; le quiz n'est dépublié
+        # que si l'établissement demande la validation.
+        if requise and (instance.est_publie or statut in (Quiz.VALIDEE, Quiz.EN_ATTENTE)):
+            attrs['statut_validation'] = Quiz.BROUILLON
+            attrs['est_publie'] = False
+            return
+        if statut in (Quiz.VALIDEE, Quiz.EN_ATTENTE):
+            attrs['statut_validation'] = statut = Quiz.BROUILLON
+    if not requise:
         return
-    if attrs.get('est_publie') is True and statut != Quiz.VALIDEE:
+    deja_publie = instance is not None and instance.est_publie
+    if attrs.get('est_publie') is True and not deja_publie and statut != Quiz.VALIDEE:
         raise ValidationError({'est_publie': [MESSAGE_PUBLICATION]})
+
+
+def contenu_change_hors_formulaire(quiz, acteur):
+    """Question ou choix modifié par les routes dédiées : mêmes conséquences qu'un contenu modifié dans le formulaire."""
+    if acteur.role in ROLES_GESTION:
+        return
+    champs = []
+    if quiz.statut_validation in (Quiz.VALIDEE, Quiz.EN_ATTENTE):
+        quiz.statut_validation = Quiz.BROUILLON
+        champs.append('statut_validation')
+    if quiz.est_publie and validation_requise(quiz.etablissement):
+        quiz.est_publie = False
+        champs.append('est_publie')
+    if champs:
+        quiz.save(update_fields=champs)
 
 
 MOTIF_MAX = 2000
@@ -93,6 +118,8 @@ def _envoyer(sujet, lignes, destinataires):
 
 
 def soumettre(quiz, request):
+    if request.user.role in ROLES_GESTION:
+        raise Conflit("Vous pouvez publier ce quiz directement.")
     if not validation_requise(quiz.etablissement):
         raise Conflit("La validation n'est pas requise pour ce quiz : publiez-le directement.")
     if quiz.statut_validation == Quiz.EN_ATTENTE:
@@ -106,7 +133,10 @@ def soumettre(quiz, request):
     quiz.motif_refus = ''
     quiz.save(update_fields=['statut_validation', 'soumis_le', 'motif_refus'])
     audit_log(request, 'soumission_validation', cible=quiz, details={'titre': quiz.titre})
-    responsables = get_user_model().objects.filter(role=RESPONSABLE, etablissement=quiz.etablissement, is_active=True)
+    actifs = get_user_model().objects.filter(etablissement=quiz.etablissement, is_active=True)
+    responsables = actifs.filter(role=RESPONSABLE)
+    if not any(u.email for u in responsables):
+        responsables = actifs.filter(role=ADMIN)
     _envoyer(f"Quiz à valider : {quiz.titre}", [
         "Bonjour,", "",
         f"{_nom(request.user)} a soumis le quiz « {quiz.titre} » pour validation avant publication.",

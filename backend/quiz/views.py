@@ -220,18 +220,25 @@ class QuestionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         with transaction.atomic():
             instance = super().perform_create(serializer, **kwargs)
             verifier_quiz_modifiable(instance.quiz)
+            validation.contenu_change_hors_formulaire(instance.quiz, self.request.user)
         return instance
 
     def perform_update(self, serializer, **kwargs):
-        verifier_quiz_modifiable(serializer.instance.quiz)
+        ancien = serializer.instance.quiz
+        verifier_quiz_modifiable(ancien)
         with transaction.atomic():
             instance = super().perform_update(serializer, **kwargs)
             verifier_quiz_modifiable(instance.quiz)
+            for quiz in {ancien.pk: ancien, instance.quiz.pk: instance.quiz}.values():
+                validation.contenu_change_hors_formulaire(quiz, self.request.user)
         return instance
 
     def perform_destroy(self, instance):
-        verifier_quiz_modifiable(instance.quiz)
-        instance.delete()
+        quiz = instance.quiz
+        verifier_quiz_modifiable(quiz)
+        with transaction.atomic():
+            instance.delete()
+            validation.contenu_change_hors_formulaire(quiz, self.request.user)
 
 
 class ChoixViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
@@ -249,18 +256,25 @@ class ChoixViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         with transaction.atomic():
             instance = super().perform_create(serializer, **kwargs)
             verifier_quiz_modifiable(instance.question.quiz)
+            validation.contenu_change_hors_formulaire(instance.question.quiz, self.request.user)
         return instance
 
     def perform_update(self, serializer, **kwargs):
-        verifier_quiz_modifiable(serializer.instance.question.quiz)
+        ancien = serializer.instance.question.quiz
+        verifier_quiz_modifiable(ancien)
         with transaction.atomic():
             instance = super().perform_update(serializer, **kwargs)
             verifier_quiz_modifiable(instance.question.quiz)
+            for quiz in {ancien.pk: ancien, instance.question.quiz.pk: instance.question.quiz}.values():
+                validation.contenu_change_hors_formulaire(quiz, self.request.user)
         return instance
 
     def perform_destroy(self, instance):
-        verifier_quiz_modifiable(instance.question.quiz)
-        instance.delete()
+        quiz = instance.question.quiz
+        verifier_quiz_modifiable(quiz)
+        with transaction.atomic():
+            instance.delete()
+            validation.contenu_change_hors_formulaire(quiz, self.request.user)
 
 
 class TentativeViewSet(viewsets.ReadOnlyModelViewSet):

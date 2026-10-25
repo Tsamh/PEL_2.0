@@ -213,3 +213,102 @@ class ParametresTests(Base):
             with self.subTest(corps=corps):
                 self.assertEqual(client_for(self.a.admin).patch(self.url(), corps, format='json').status_code, 400)
         self.assertIn('validation_quiz_requise', self.resp.get(f'/api/referentiel/etablissements/{self.a.etab.id}/').data)
+
+
+class ContenuHorsFormulaireTests(Base):
+    """Les routes questions/ et choix/ ne doivent pas contourner la validation."""
+
+    def setUp(self):
+        super().setUp()
+        self.activer()
+        self.quiz_id = self.creer().data['id']
+        self.valider_en_base(self.quiz_id)
+        self.question = Quiz.objects.get(pk=self.quiz_id).questions.get()
+        self.choix = self.question.choix.order_by('id').first()
+
+    def etat(self):
+        quiz = Quiz.objects.get(pk=self.quiz_id)
+        return quiz.est_publie, quiz.statut_validation
+
+    def test_modifications_par_l_enseignant_depublient(self):
+        requetes = [
+            lambda c: c.patch(f'/api/quiz/questions/{self.question.id}/', {'texte': '3 + 3 ?'}, format='json'),
+            lambda c: c.patch(f'/api/quiz/choix/{self.choix.id}/', {'est_correct': False}, format='json'),
+            lambda c: c.post('/api/quiz/questions/', {'quiz': self.quiz_id, 'texte': 'Nouvelle ?',
+                                                      'type_question': 'courte', 'points': '1'}, format='json'),
+            lambda c: c.delete(f'/api/quiz/choix/{self.choix.id}/'),
+        ]
+        for i, requete in enumerate(requetes):
+            with self.subTest(requete=i):
+                self.valider_en_base(self.quiz_id)
+                res = requete(self.ens)
+                self.assertLess(res.status_code, 300, getattr(res, 'data', None))
+                self.assertEqual(self.etat(), (False, Quiz.BROUILLON))
+
+    def test_modification_par_l_admin_sans_effet(self):
+        res = client_for(self.a.admin).patch(f'/api/quiz/questions/{self.question.id}/', {'texte': '3 + 3 ?'},
+                                             format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual(self.etat(), (True, Quiz.VALIDEE))
+
+    def test_sans_reglage_le_quiz_reste_publie(self):
+        self.activer(False)
+        self.ens.patch(f'/api/quiz/choix/{self.choix.id}/', {'est_correct': False}, format='json')
+        self.assertEqual(self.etat(), (True, Quiz.BROUILLON))
+
+
+class ReglageEtStatutTests(Base):
+    def test_quiz_publie_avant_activation_reste_enregistrable(self):
+        quiz_id = self.creer(est_publie=True).data['id']
+        self.activer()
+        res = self.patch(quiz_id, {'est_publie': True, 'date_fin': '2030-01-01T10:00:00Z'})
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertTrue(res.data['est_publie'])
+        res = self.patch(quiz_id, {'est_publie': True, 'duree_minutes': 45})
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual((res.data['est_publie'], res.data['statut_validation']), (False, 'brouillon'))
+
+    def test_statut_valide_perime_sans_reglage(self):
+        quiz_id = self.creer().data['id']
+        self.valider_en_base(quiz_id)
+        res = self.patch(quiz_id, {'est_publie': True, 'duree_minutes': 45})
+        self.assertEqual(res.status_code, 200, res.data)
+        self.assertEqual((res.data['est_publie'], res.data['statut_validation']), (True, 'brouillon'))
+        self.activer()
+        self.assertFalse(self.patch(quiz_id, {'est_publie': False}).data['est_publie'])
+        res = self.patch(quiz_id, {'est_publie': True})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn(MESSAGE, str(res.data))
+
+    def test_publication_par_la_gestion_renseigne_la_validation(self):
+        self.activer()
+        quiz_id = self.creer().data['id']
+        Quiz.objects.filter(pk=quiz_id).update(statut_validation=Quiz.REFUSEE, motif_refus='Trop court')
+        res = self.patch(quiz_id, {'est_publie': True}, client=self.resp)
+        self.assertEqual(res.status_code, 200, res.data)
+        quiz = Quiz.objects.get(pk=quiz_id)
+        self.assertEqual((quiz.statut_validation, quiz.valide_par_id, quiz.motif_refus),
+                         (Quiz.VALIDEE, self.a.resp.id, ''))
+        self.assertIsNotNone(quiz.valide_le)
+
+    def test_la_gestion_ne_soumet_pas(self):
+        self.activer()
+        quiz_id = self.creer().data['id']
+        res = client_for(self.a.admin).post(f'{Q}/{quiz_id}/soumettre_validation/', {}, format='json')
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("Vous pouvez publier ce quiz directement.", str(res.data))
+
+    def test_soumission_sans_responsable_joignable_previent_l_admin(self):
+        self.activer()
+        self.a.resp.email = ''
+        self.a.resp.save()
+        quiz_id = self.creer().data['id']
+        self.assertEqual(self.ens.post(f'{Q}/{quiz_id}/soumettre_validation/', {}, format='json').status_code, 200)
+        self.assertEqual([m.to for m in mail.outbox], [[self.a.admin.email]])
+
+    def test_reglage_en_lecture_seule_dans_le_referentiel(self):
+        res = client_for(self.w.superadmin).patch(f'/api/referentiel/etablissements/{self.a.etab.id}/',
+                                                  {'validation_quiz_requise': True}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        self.a.etab.refresh_from_db()
+        self.assertFalse(self.a.etab.validation_quiz_requise)
