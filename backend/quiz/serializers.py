@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from .acces import CLES_CIBLES, verifier_cibles
 from .exceptions import Conflit, MESSAGE_VERROU
+from . import fenetres
 from .banque import contenu_question, contenu_version, q_banque_visible
 from .models import Quiz, Question, Choix, TentativeQuiz, ReponseQuiz, QuestionBanque, VersionQuestion
 from .passage import corrige_visible, meilleure_tentative, score_visible
@@ -261,15 +262,17 @@ class QuizEtudiantSerializer(serializers.ModelSerializer):
         en_cours = next((t for t in tentatives if t.statut == TentativeQuiz.EN_COURS), None)
         soumises = [t for t in tentatives if t.statut == TentativeQuiz.SOUMISE]
         meilleure = meilleure_tentative(soumises) if score_visible(quiz) else None
-        maintenant = timezone.now()
-        ouvert = (quiz.date_debut is None or quiz.date_debut <= maintenant) and (quiz.date_fin is None or maintenant < quiz.date_fin)
+        fenetre = fenetres.fenetre(quiz, etudiant)
+        ouverture, fermeture = fenetre.affichee()
         return {
             'tentatives_utilisees': len(tentatives),
-            'tentatives_restantes': max(0, quiz.tentatives_autorisees - len(tentatives)),
+            'tentatives_restantes': max(0, fenetre.tentatives_max - len(tentatives)),
+            'tentatives_max': fenetre.tentatives_max,
             'tentative_en_cours': en_cours.id if en_cours else None,
             'derniere_tentative': soumises[-1].id if soumises else None,
             'meilleure_note': _resultat(meilleure) if meilleure else None,
-            'ouvert': ouvert,
+            'ouvert': fenetre.ouverte is not None,
+            'fenetre': {'ouverture': ouverture, 'fermeture': fermeture, 'prochaine_ouverture': fenetre.prochaine_ouverture},
         }
 
 

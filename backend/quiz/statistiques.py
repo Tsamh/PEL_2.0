@@ -247,3 +247,19 @@ def resultats_etudiant(etudiant, quizzes):
         })
     resultats.sort(key=lambda r: r['date'])
     return {'etudiant': {'id': etudiant.pk, 'nom': _nom(etudiant)}, 'resultats': resultats}
+
+
+def candidats_rattrapage(quiz, seuil):
+    """Étudiants concernés sans tentative soumise, ou dont la meilleure note est sous le seuil (%)."""
+    etudiants, par_etudiant, _ = _contexte(quiz, avec_choix=False)
+    candidats = []
+    for pk, etudiant in etudiants.items():
+        tentatives = par_etudiant.get(pk, [])
+        meilleure = meilleure_tentative(tentatives)
+        pourcentage = _pourcentage(meilleure.score, meilleure.score_max) if meilleure else None
+        if pourcentage is None or pourcentage < seuil:
+            candidats.append({
+                'id': pk, 'nom': _nom(etudiant), 'statut': _statut(tentatives),
+                'meilleure_pourcentage': _dec(pourcentage) if pourcentage is not None else None,
+            })
+    return sorted(candidats, key=lambda c: c['nom'].lower())

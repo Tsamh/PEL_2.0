@@ -146,6 +146,15 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         passage.cloturer_expirees(quiz.tentatives.all())
         return Response(stats.statistiques_quiz(quiz))
 
+    @action(detail=True, methods=['get'], permission_classes=[RolePermission(read=CREATEURS)])
+    def candidats_rattrapage(self, request, pk=None):
+        quiz = self.get_object()
+        seuil = en_decimal(request.query_params.get('seuil', '50'))
+        if seuil is None or not 0 <= seuil <= 100:
+            raise ValidationError({'seuil': ["Le seuil doit être un pourcentage entre 0 et 100."]})
+        passage.cloturer_expirees(quiz.tentatives.all())
+        return Response(stats.candidats_rattrapage(quiz, seuil))
+
     @action(detail=False, methods=['get'], url_path='statistiques', url_name='vue-ensemble',
             permission_classes=[RolePermission(read=CREATEURS)])
     def vue_ensemble(self, request):
