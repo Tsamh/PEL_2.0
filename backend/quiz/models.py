@@ -63,6 +63,7 @@ class Quiz(models.Model):
     annee_academique = models.ForeignKey('referentiel.AnneeAcademique', on_delete=models.SET_NULL, null=True, blank=True)
     periode = models.ForeignKey('referentiel.PeriodeEvaluation', on_delete=models.SET_NULL, null=True, blank=True,
                                 related_name='quizzes')
+    ec = models.ForeignKey('referentiel.EC', on_delete=models.SET_NULL, null=True, blank=True, related_name='quizzes')
     duree_minutes = models.PositiveIntegerField(default=30, validators=[MinValueValidator(1)])
     date_debut = models.DateTimeField(null=True, blank=True)
     date_fin = models.DateTimeField(null=True, blank=True)

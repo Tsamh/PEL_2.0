@@ -62,9 +62,8 @@ def _sessions_applicables(quiz, etudiant):
     return list(normales), list(rattrapages)
 
 
-def fenetre(quiz, etudiant, maintenant=None):
-    maintenant = maintenant or timezone.now()
-    normales, rattrapages = _sessions_applicables(quiz, etudiant)
+def construire(quiz, normales, rattrapages, maintenant):
+    """Fenêtre à partir des sessions déjà connues (calcul pur, sans requête)."""
     intervalles = [(s.ouverture, s.fermeture) for s in normales] or [(quiz.date_debut, quiz.date_fin)]
     intervalles += [(s.ouverture, s.fermeture) for s in rattrapages]
     # Les tentatives supplémentaires ne servent que pendant que leur rattrapage est ouvert.
@@ -72,3 +71,8 @@ def fenetre(quiz, etudiant, maintenant=None):
     a_venir = any(s.ouverture > maintenant for s in rattrapages)
     return Fenetre(intervalles=intervalles, tentatives_max=quiz.tentatives_autorisees + bonus,
                    maintenant=maintenant, rattrapage_a_venir=a_venir)
+
+
+def fenetre(quiz, etudiant, maintenant=None):
+    normales, rattrapages = _sessions_applicables(quiz, etudiant)
+    return construire(quiz, normales, rattrapages, maintenant or timezone.now())

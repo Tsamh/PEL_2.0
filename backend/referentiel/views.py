@@ -54,13 +54,23 @@ class EtablissementViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['patch'], permission_classes=[RolePermission(read=GESTION, write=(SUPERADMIN, ADMIN))])
     def parametres(self, request, pk=None):
         etablissement = self.get_object()
-        valeur = request.data.get('validation_quiz_requise') if isinstance(request.data, dict) else None
-        if not isinstance(valeur, bool):
-            raise ValidationError({'validation_quiz_requise': ["La valeur doit être vrai ou faux."]})
-        etablissement.validation_quiz_requise = valeur
-        etablissement.save(update_fields=['validation_quiz_requise'])
-        audit_log(request, 'parametres_etablissement', cible=etablissement, etablissement=etablissement,
-                  details={'validation_quiz_requise': valeur})
+        data = request.data if isinstance(request.data, dict) else {}
+        valeurs = {}
+        if 'validation_quiz_requise' in data:
+            if not isinstance(data['validation_quiz_requise'], bool):
+                raise ValidationError({'validation_quiz_requise': ["La valeur doit être vrai ou faux."]})
+            valeurs['validation_quiz_requise'] = data['validation_quiz_requise']
+        if 'delai_retard_minutes' in data:
+            delai = data['delai_retard_minutes']
+            if isinstance(delai, bool) or not isinstance(delai, int) or not 0 <= delai <= 240:
+                raise ValidationError({'delai_retard_minutes': ["Le délai doit être un nombre entier de minutes entre 0 et 240."]})
+            valeurs['delai_retard_minutes'] = delai
+        if not valeurs:
+            raise ValidationError({'detail': "Aucun réglage à modifier."})
+        for champ, valeur in valeurs.items():
+            setattr(etablissement, champ, valeur)
+        etablissement.save(update_fields=list(valeurs))
+        audit_log(request, 'parametres_etablissement', cible=etablissement, etablissement=etablissement, details=valeurs)
         return Response(EtablissementSerializer(etablissement, context=self.get_serializer_context()).data)
 
     def create(self, request, *args, **kwargs):

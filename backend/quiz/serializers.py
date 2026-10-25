@@ -164,6 +164,7 @@ class QuizSerializer(serializers.ModelSerializer):
     niveau_libelle = serializers.CharField(source='niveau.libelle', read_only=True, default=None)
     annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True, default=None)
     periode_libelle = serializers.CharField(source='periode.libelle', read_only=True, default=None)
+    ec_libelle = serializers.SerializerMethodField()
     a_des_tentatives = serializers.SerializerMethodField()
     classes_detail = serializers.SerializerMethodField()
     groupes_detail = serializers.SerializerMethodField()
@@ -184,6 +185,10 @@ class QuizSerializer(serializers.ModelSerializer):
     def get_valide_par_nom(self, quiz):
         u = quiz.valide_par
         return (u.get_full_name() or u.username) if u else ''
+
+    def get_ec_libelle(self, obj):
+        # SerializerMethodField : un CharField(default=None) est omis en PATCH (partial) quand `ec` est nul.
+        return obj.ec.libelle if obj.ec_id else None
 
     def get_a_des_tentatives(self, quiz):
         return quiz.tentatives.exists()

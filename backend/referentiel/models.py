@@ -1,3 +1,4 @@
+from django.core.validators import MaxValueValidator
 from django.db import models
 
 
@@ -11,6 +12,7 @@ class Etablissement(models.Model):
     site_web = models.URLField(blank=True)
     logo = models.ImageField(upload_to='logos/', blank=True, null=True)
     validation_quiz_requise = models.BooleanField(default=False)
+    delai_retard_minutes = models.PositiveSmallIntegerField(default=15, validators=[MaxValueValidator(240)])
     date_creation = models.DateField(auto_now_add=True)
 
     class Meta:
