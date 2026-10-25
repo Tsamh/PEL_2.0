@@ -149,7 +149,8 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='statistiques', url_name='vue-ensemble',
             permission_classes=[RolePermission(read=CREATEURS)])
     def vue_ensemble(self, request):
-        page = self.paginate_queryset(self.get_queryset().order_by('-date_creation', '-id'))
+        page = self.paginate_queryset(
+            stats.quizzes_du_perimetre(request.user).prefetch_related('questions').order_by('-date_creation', '-id'))
         passage.cloturer_expirees(TentativeQuiz.objects.filter(quiz__in=[q.pk for q in page]))
         return self.get_paginated_response([stats.resume_quiz(q) for q in page])
 

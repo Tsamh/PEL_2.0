@@ -70,20 +70,23 @@ def etudiants_du_perimetre(user):
     if user.role in (ADMIN, RESPONSABLE):
         return qs.filter(etablissement_id=user.etablissement_id) if user.etablissement_id else qs.none()
     if user.role == ENSEIGNANT:
-        return qs.filter(pk__in=qs.filter(inscriptions__classe__in=classes_enseignant(user)).values('pk'))
+        return qs.filter(
+            Q(pk__in=qs.filter(inscriptions__classe__in=classes_enseignant(user)).values('pk'))
+            | Q(pk__in=qs.filter(tentatives_quiz__quiz__cree_par=user).values('pk'))
+        )
     return qs.none()
 
 
-def _tentatives(quiz):
+def _tentatives(quiz, avec_choix=True):
     return list(
         quiz.tentatives.select_related('etudiant')
-        .prefetch_related('reponses__choix_selectionnes').order_by('numero', 'id')
+        .prefetch_related('reponses__choix_selectionnes' if avec_choix else 'reponses').order_by('numero', 'id')
     )
 
 
-def _contexte(quiz):
+def _contexte(quiz, avec_choix=True):
     """(étudiants concernés {pk: user}, tentatives par étudiant, meilleures tentatives)."""
-    tentatives = _tentatives(quiz)
+    tentatives = _tentatives(quiz, avec_choix)
     par_etudiant = {}
     for t in tentatives:
         par_etudiant.setdefault(t.etudiant_id, []).append(t)
@@ -154,10 +157,12 @@ def _question(question, reponses):
         'id': question.id, 'ordre': question.ordre, 'texte': question.texte, 'type_question': question.type_question,
         'points': _dec(question.points), 'nb_reponses': len(repondues), 'nb_sans_reponse': total - len(repondues),
         'taux_reussite': _part(reussies, total), 'score_moyen': _dec(sum(scores) / total) if total else '0.00',
+        'nb_a_valider': sum(1 for r in reponses if r is not None and r.statut_correction == ReponseQuiz.A_VALIDER),
         'choix': [], 'erreurs_frequentes': [],
     }
     if question.type_question == 'courte':
-        fausses = Counter(' '.join(r.texte_reponse.lower().split()) for r in repondues if r.score_obtenu < question.points)
+        fausses = Counter(' '.join(r.texte_reponse.lower().split()) for r in repondues
+                         if r.score_obtenu < question.points and r.statut_correction != ReponseQuiz.A_VALIDER)
         donnees['erreurs_frequentes'] = [{'texte': t, 'nb': nb} for t, nb in fausses.most_common(NB_ERREURS)]
         return donnees
     coches = Counter(c.id for r in repondues for c in r.choix_selectionnes.all())
@@ -193,6 +198,7 @@ def statistiques_quiz(quiz):
     questions = list(quiz.questions.prefetch_related('choix').order_by('ordre', 'id'))
     index = {t.pk: {r.question_id: r for r in t.reponses.all()} for t in retenues}
     return {
+        'titre': quiz.titre,
         'population': _population(etudiants, par_etudiant),
         'notes': _notes(retenues, sum((q.points for q in questions), ZERO)),
         'distribution': _distribution(retenues),
@@ -202,7 +208,7 @@ def statistiques_quiz(quiz):
 
 
 def resume_quiz(quiz):
-    etudiants, par_etudiant, retenues = _contexte(quiz)
+    etudiants, par_etudiant, retenues = _contexte(quiz, avec_choix=False)
     score_max = sum((q.points for q in quiz.questions.all()), ZERO)
     notes = _notes(retenues, score_max)
     a_valider = sum(

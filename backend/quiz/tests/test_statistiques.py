@@ -99,7 +99,18 @@ class StatistiquesServiceTests(Scenario, TestCase):
         self.assertEqual(q1['erreurs_frequentes'], [{'texte': '5', 'nb': 1}])
         self.assertEqual(q2['taux_reussite'], '33.33')
         self.assertEqual(q2['choix'], [])
-        self.assertEqual(q2['erreurs_frequentes'], [{'texte': 'lyon', 'nb': 2}])
+        self.assertEqual(q2['erreurs_frequentes'], [])
+        self.assertEqual((q1['nb_a_valider'], q2['nb_a_valider']), (0, 3))
+
+    def test_reponse_courte_fausse_validee_dans_les_erreurs(self):
+        ReponseQuiz.objects.filter(tentative__etudiant=self.etu5, question=self.q2).update(
+            statut_correction=ReponseQuiz.VALIDEE, score_obtenu=Decimal('0'))
+        q2 = statistiques.statistiques_quiz(self.quiz)['questions'][1]
+        self.assertEqual(q2['erreurs_frequentes'], [{'texte': 'lyon', 'nb': 1}])
+        self.assertEqual(q2['nb_a_valider'], 2)
+
+    def test_titre(self):
+        self.assertEqual(statistiques.statistiques_quiz(self.quiz)['titre'], self.quiz.titre)
 
     def test_suivi_individuel(self):
         lignes = {l['id']: l for l in statistiques.statistiques_quiz(self.quiz)['etudiants']}
@@ -164,7 +175,7 @@ class StatistiquesApiTests(Scenario, TestCase):
     def test_tableau_de_bord(self):
         res = client_for(self.a.ens).get(f'{Q}/quizzes/{self.quiz.id}/statistiques/')
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(set(res.data), {'population', 'notes', 'distribution', 'questions', 'etudiants'})
+        self.assertEqual(set(res.data), {'titre', 'population', 'notes', 'distribution', 'questions', 'etudiants'})
         self.assertEqual(res.data['population']['taux_participation'], '60.00')
         self.assertEqual(client_for(self.a.admin).get(f'{Q}/quizzes/{self.quiz.id}/statistiques/').status_code, 200)
 
@@ -203,3 +214,9 @@ class StatistiquesApiTests(Scenario, TestCase):
         self.assertEqual(client_for(self.a.ens).get(f'{Q}/etudiants/{self.w.b.etu.id}/resultats/').status_code, 404)
         self.assertEqual(client_for(self.a.ens).get(f'{Q}/etudiants/{self.a.ens.id}/resultats/').status_code, 404)
         self.assertEqual(client_for(self.a.ens).get(f'{Q}/etudiants/99999999999999999999999/resultats/').status_code, 404)
+
+    def test_fiche_etudiant_ayant_une_tentative_hors_classe(self):
+        Inscription.objects.filter(etudiant=self.etu5).delete()
+        self.assertEqual(client_for(self.a.ens).get(f'{Q}/etudiants/{self.etu5.id}/resultats/').status_code, 200)
+        Inscription.objects.filter(etudiant=self.etu4).delete()
+        self.assertEqual(client_for(self.a.ens).get(f'{Q}/etudiants/{self.etu4.id}/resultats/').status_code, 404)
