@@ -10,6 +10,8 @@ import { resumeCibles } from './cibles';
 import QuestionEditeur from './QuestionEditeur';
 import SelecteurBanque from './SelecteurBanque';
 import { depuisApi, nouvelleQuestion, versContenu } from './questions';
+import StatutValidation from './StatutValidation';
+import { useAuth } from '../../context/AuthContext';
 
 const formulaireVide = {
   titre: '', description: '', filiere: '', niveau: '', annee_academique: '', periode: '',
@@ -24,6 +26,18 @@ function versChampLocal(iso) {
   const d = new Date(iso);
   const pad = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const STATUTS_VALIDATION = { en_attente: ['badge-pending', 'En attente de validation'], refusee: ['badge-inactive', 'Refusé'] };
+
+function badgeStatut(item) {
+  if (item.est_publie) return <span className="badge badge-active">Publié</span>;
+  if (item.validation_requise && STATUTS_VALIDATION[item.statut_validation]) {
+    const [classe, libelle] = STATUTS_VALIDATION[item.statut_validation];
+    return <span className={`badge ${classe}`}>{libelle}</span>;
+  }
+  if (item.validation_requise && item.statut_validation === 'validee') return <span className="badge badge-inactive">Validé, non publié</span>;
+  return <span className="badge badge-inactive">Brouillon</span>;
 }
 
 export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
@@ -42,11 +56,15 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
   const [annees, setAnnees] = useState([]);
   const [periodes, setPeriodes] = useState([]);
   const [saving, setSaving] = useState(false);
+  const { user } = useAuth();
+  const [validationRequise, setValidationRequise] = useState(false);
 
   const verrouille = Boolean(editingItem?.a_des_tentatives);
+  const soumisAValidation = user?.role === 'enseignant' && (editingItem ? editingItem.validation_requise : validationRequise);
 
   useEffect(() => {
     fetchItems();
+    api.get('/quiz/quizzes/validation/').then((res) => setValidationRequise(res.data.validation_requise)).catch(() => setValidationRequise(false));
     const liste = (res) => res.data.results || res.data;
     Promise.all([
       api.get('/referentiel/filieres/'), api.get('/referentiel/niveaux/'), api.get('/referentiel/annees-academiques/'),
@@ -283,8 +301,13 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                 <div className="form-group">
                   <label><input type="checkbox" checked={form.reprise_autorisee} onChange={(e) => setForm({ ...form, reprise_autorisee: e.target.checked })} style={{ width: 'auto', marginRight: '8px' }} />Reprise autorisée après une déconnexion</label>
                   <label><input type="checkbox" checked={form.afficher_corrige} onChange={(e) => setForm({ ...form, afficher_corrige: e.target.checked })} style={{ width: 'auto', marginRight: '8px' }} />Afficher le corrigé (quand l'étudiant n'a plus de tentative ou que le quiz est fermé)</label>
-                  <label><input type="checkbox" checked={form.est_publie} onChange={(e) => setForm({ ...form, est_publie: e.target.checked })} style={{ width: 'auto', marginRight: '8px' }} />Publier</label>
+                  {(!soumisAValidation || editingItem?.statut_validation === 'validee') && (
+                    <label><input type="checkbox" checked={form.est_publie} onChange={(e) => setForm({ ...form, est_publie: e.target.checked })} style={{ width: 'auto', marginRight: '8px' }} />Publier</label>
+                  )}
                 </div>
+                {soumisAValidation && (
+                  <StatutValidation quiz={editingItem} onChange={(quiz) => { setEditingItem(quiz); fetchItems(); }} />
+                )}
 
                 <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--gray-200)' }} />
                 <AffectationQuiz
@@ -365,7 +388,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                   <td>{item.questions?.length || 0}</td>
                   <td>{item.duree_minutes} min</td>
                   <td>{item.tentatives_autorisees}</td>
-                  <td>{item.est_publie ? <span className="badge badge-active">Publié</span> : <span className="badge badge-inactive">Brouillon</span>}</td>
+                  <td>{badgeStatut(item)}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{ marginRight: '8px' }}>Modifier</button>
                     <Link className="btn btn-sm btn-outline" to={`/quiz/${item.id}/tentatives`} style={{ marginRight: '8px' }}>Tentatives</Link>
