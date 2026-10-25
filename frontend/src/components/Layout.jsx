@@ -9,6 +9,7 @@ const adminMenu = [
   { path: '/journal', label: "Journal d'audit", roles: ['superadmin', 'admin'] },
   { section: 'Référentiel' },
   { path: '/annees-academiques', label: 'Années académiques' },
+  { path: '/calendrier', label: 'Calendrier' },
   { path: '/filieres', label: 'Filières' },
   { path: '/niveaux', label: 'Niveaux' },
   { path: '/ues', label: 'Unités d\'enseignement' },

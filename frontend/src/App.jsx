@@ -8,6 +8,7 @@ import RegisterAdmin from './pages/RegisterAdmin';
 import RegisterSuccess from './pages/RegisterSuccess';
 import Dashboard from './pages/Dashboard';
 import AnneesAcademiques from './pages/AnneesAcademiques';
+import Calendrier from './pages/Calendrier';
 import Filieres from './pages/Filieres';
 import Niveaux from './pages/Niveaux';
 import UEList from './pages/UEList';
@@ -69,6 +70,7 @@ function App() {
           <Route path="/" element={<PrivateRoute><Layout /></PrivateRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="annees-academiques" element={<RoleRoute roles={GESTION}><AnneesAcademiques /></RoleRoute>} />
+            <Route path="calendrier" element={<RoleRoute roles={GESTION}><Calendrier /></RoleRoute>} />
             <Route path="filieres" element={<RoleRoute roles={GESTION}><Filieres /></RoleRoute>} />
             <Route path="niveaux" element={<RoleRoute roles={GESTION}><Niveaux /></RoleRoute>} />
             <Route path="ues" element={<RoleRoute roles={GESTION}><UEList /></RoleRoute>} />

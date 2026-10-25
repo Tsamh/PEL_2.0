@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../services/api';
 import { messageErreur } from '../../services/erreurs';
+import { chargerTout } from '../../services/pagination';
 import AffectationQuiz from './AffectationQuiz';
 import AccesQuiz from './AccesQuiz';
 import { resumeCibles } from './cibles';
@@ -10,7 +11,7 @@ import SelecteurBanque from './SelecteurBanque';
 import { depuisApi, nouvelleQuestion, versContenu } from './questions';
 
 const formulaireVide = {
-  titre: '', description: '', filiere: '', niveau: '', annee_academique: '',
+  titre: '', description: '', filiere: '', niveau: '', annee_academique: '', periode: '',
   duree_minutes: 30, date_debut: '', date_fin: '', est_publie: false,
   tentatives_autorisees: 1, reprise_autorisee: true, publication_resultats: 'immediate', afficher_corrige: false,
   classes: [], groupes: [], etudiants: [],
@@ -38,6 +39,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
   const [filieres, setFilieres] = useState([]);
   const [niveaux, setNiveaux] = useState([]);
   const [annees, setAnnees] = useState([]);
+  const [periodes, setPeriodes] = useState([]);
   const [saving, setSaving] = useState(false);
 
   const verrouille = Boolean(editingItem?.a_des_tentatives);
@@ -49,6 +51,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
       api.get('/referentiel/filieres/'), api.get('/referentiel/niveaux/'), api.get('/referentiel/annees-academiques/'),
     ]).then(([f, n, a]) => { setFilieres(liste(f)); setNiveaux(liste(n)); setAnnees(liste(a)); })
       .catch(() => setError('Erreur lors du chargement des listes de référence.'));
+    chargerTout('/referentiel/periodes-evaluation/').then(setPeriodes).catch(() => setError('Erreur lors du chargement des périodes.'));
   }, []);
 
   const fetchItems = async () => {
@@ -76,7 +79,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
     setEditingItem(item);
     setForm({
       titre: item.titre, description: item.description || '',
-      filiere: item.filiere || '', niveau: item.niveau || '', annee_academique: item.annee_academique || '',
+      filiere: item.filiere || '', niveau: item.niveau || '', annee_academique: item.annee_academique || '', periode: item.periode || '',
       duree_minutes: item.duree_minutes, date_debut: versChampLocal(item.date_debut), date_fin: versChampLocal(item.date_fin),
       est_publie: item.est_publie, tentatives_autorisees: item.tentatives_autorisees,
       reprise_autorisee: item.reprise_autorisee, publication_resultats: item.publication_resultats,
@@ -151,6 +154,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
       filiere: form.filiere || null,
       niveau: form.niveau || null,
       annee_academique: form.annee_academique || null,
+      periode: form.periode || null,
       date_debut: form.date_debut ? new Date(form.date_debut).toISOString() : null,
       date_fin: form.date_fin ? new Date(form.date_fin).toISOString() : null,
     };
@@ -241,6 +245,15 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                   <div className="form-group">
                     <label>Durée (minutes)</label>
                     <input type="number" min="1" value={form.duree_minutes} onChange={(e) => setForm({ ...form, duree_minutes: parseInt(e.target.value, 10) || 1 })} />
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Période d'évaluation</label>
+                    <select value={form.periode} onChange={(e) => setForm({ ...form, periode: e.target.value })}>
+                      <option value="">-- Aucune --</option>
+                      {periodes.map((p) => <option key={p.id} value={p.id}>{p.semestre_libelle} : {p.libelle}</option>)}
+                    </select>
                   </div>
                 </div>
                 <div className="form-row">
