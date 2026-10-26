@@ -172,7 +172,7 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
         runner = CodeRunner()
         result = runner.run(code, devoir.langage, test_cases)
 
-        if request.user.role == 'etudiant':
+        if request.user.role == ETUDIANT:
             safe_result = {
                 "success": result["success"],
                 "output": result.get("output", ""),
@@ -614,7 +614,9 @@ class NoteMatiereViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelV
                 statut='corrige',
                 score__isnull=False
             ).select_related('devoir').prefetch_related('devoir__exercices')
-            notes_20 = [float(s.score) * 20.0 / float(s.devoir.bareme) for s in soumissions if s.devoir.bareme]
+            # Même règle que la correction et GestionNotes : la note maximale est floor(barème).
+            maximums = [(s, math.floor(s.devoir.bareme)) for s in soumissions]
+            notes_20 = [float(s.score) * 20.0 / maximum for s, maximum in maximums if maximum]
             avg_prog = sum(notes_20) / len(notes_20) if notes_20 else None
 
             note_prog = round(avg_prog, 1) if avg_prog else None

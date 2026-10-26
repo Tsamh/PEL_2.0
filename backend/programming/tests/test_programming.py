@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.test import TestCase
 
 from accounts.testing import build_world, client_for, make_user
@@ -133,6 +135,26 @@ class NotesTests(TestCase):
         self.assertEqual(client_for(a.etu).post(f'{P}/notes/', {}, format='json').status_code, 403)
         self.assertEqual(client_for(a.etu).get(f'{P}/notes/mes_notes/').status_code, 200)
         self.assertEqual(client_for(a.ens).get(f'{P}/notes/mes_notes/').status_code, 403)
+
+    def _note_prog(self, *points):
+        a = self.w.a
+        a.exercice.points = points[0]
+        a.exercice.save()
+        for i, p in enumerate(points[1:], start=2):
+            a.devoir.exercices.create(ordre=i, titre=f'Exercice {i}', points=p)
+        NoteMatiere.objects.create(etudiant=a.etu, ec=a.ec, classe=a.classe, annee_academique=a.annee)
+        maximum = int(sum(Decimal(str(p)) for p in points))
+        SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, statut='corrige', score=maximum)
+        res = client_for(a.etu).get(f'{P}/notes/mes_notes/')
+        self.assertEqual(res.status_code, 200)
+        return res.data[0]['note_devoir_prog']
+
+    def test_mes_notes_bareme_decimal_comme_l_enseignant(self):
+        # Score entier borné par floor(barème) : la note maximale vaut 20/20, comme dans GestionNotes.
+        self.assertEqual(self._note_prog('5', '5.5'), 20.0)
+
+    def test_mes_notes_bareme_inferieur_a_un_ignore(self):
+        self.assertIsNone(self._note_prog('0.5'))
 
 
 class ControlesNotesTests(TestCase):
