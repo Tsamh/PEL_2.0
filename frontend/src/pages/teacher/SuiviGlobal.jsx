@@ -3,6 +3,7 @@ import api from '../../services/api';
 import { chargerTout } from '../../services/pagination';
 import { messageErreur } from '../../services/erreurs';
 import { useAuth } from '../../context/AuthContext';
+import CaseArchives from '../../components/CaseArchives';
 import Barre from '../../components/stats/Barre';
 import { pourcentage } from '../../components/stats/format';
 
@@ -42,11 +43,13 @@ export default function SuiviGlobal() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [archives, setArchives] = useState(false);
+  const paramsArchives = archives ? { archives: '1' } : undefined;
 
   useEffect(() => {
     Promise.all([
-      chargerTout('/referentiel/annees-academiques/'), chargerTout('/referentiel/periodes-evaluation/'),
-      chargerTout('/referentiel/filieres/'), chargerTout('/referentiel/classes/'), chargerTout('/referentiel/ecs/'),
+      chargerTout('/referentiel/annees-academiques/'), chargerTout('/referentiel/periodes-evaluation/', paramsArchives),
+      chargerTout('/referentiel/filieres/'), chargerTout('/referentiel/classes/', paramsArchives), chargerTout('/referentiel/ecs/'),
     ]).then(([annees, periodes, filieres, classes, ecs]) => setReferences({ annees, periodes, filieres, classes, ecs }))
       .catch((err) => setError(messageErreur(err, 'Erreur lors du chargement des filtres.')));
     if (user?.role === 'admin') {
@@ -58,10 +61,12 @@ export default function SuiviGlobal() {
         })
         .catch((err) => setError(messageErreur(err, "Erreur lors du chargement de l'établissement.")));
     }
-  }, [user]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, archives]);
 
   const params = () => {
     const p = { regroupement };
+    if (archives) p.archives = '1';
     Object.entries(filtres).forEach(([cle, valeur]) => { if (valeur) p[cle] = valeur; });
     return p;
   };
@@ -75,7 +80,7 @@ export default function SuiviGlobal() {
       .catch((err) => setError(messageErreur(err, 'Erreur lors du chargement du suivi.')))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtres, regroupement]);
+  }, [filtres, regroupement, archives]);
 
   const ouvrirGroupe = async (g) => {
     try {
@@ -91,6 +96,7 @@ export default function SuiviGlobal() {
   const ouvrirEvaluation = async (e) => {
     try {
       const p = { quiz: e.quiz };
+      if (archives) p.archives = '1';
       if (filtres.classe) p.classe = filtres.classe;
       if (groupe) {
         p.regroupement = regroupement;
@@ -129,6 +135,7 @@ export default function SuiviGlobal() {
   return (
     <div>
       <div className="page-header"><h1>Suivi global</h1></div>
+      <CaseArchives archives={archives} onChange={(v) => { setArchives(v); setFiltres(FILTRES_VIDES); }} />
       {error && <div className="alert alert-error">{error}</div>}
       {message && <div className="alert alert-success">{message}</div>}
 

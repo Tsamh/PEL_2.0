@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import CodeEditor from '../../components/CodeEditor';
+import CaseArchives from '../../components/CaseArchives';
 
 export default function DevoirManagement() {
   const { user } = useAuth();
@@ -21,19 +22,22 @@ export default function DevoirManagement() {
   const [annees, setAnnees] = useState([]);
   const [ecs, setEcs] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [archives, setArchives] = useState(false);
 
   useEffect(() => {
-    fetchItems();
     api.get('/referentiel/filieres/').then((res) => setFilieres(res.data.results || res.data));
     api.get('/referentiel/niveaux/').then((res) => setNiveaux(res.data.results || res.data));
-    api.get('/referentiel/annees-academiques/').then((res) => setAnnees(res.data.results || res.data));
+    api.get('/referentiel/annees-academiques/').then((res) => setAnnees((res.data.results || res.data).filter((a) => !a.archivee)));
     api.get('/referentiel/ecs/').then((res) => setEcs(res.data.results || res.data));
   }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchItems(); }, [archives]);
 
   const fetchItems = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/programming/devoirs/');
+      const res = await api.get('/programming/devoirs/', { params: archives ? { archives: '1' } : {} });
       setItems(res.data.results || res.data);
     } catch (err) {
       setError('Erreur lors du chargement.');
@@ -106,8 +110,10 @@ export default function DevoirManagement() {
     <div>
       <div className="page-header">
         <h1>Devoirs de programmation</h1>
-        <button className="btn btn-primary" onClick={openCreate}>+ Créer un devoir</button>
+        {!archives && <button className="btn btn-primary" onClick={openCreate}>+ Créer un devoir</button>}
       </div>
+
+      <CaseArchives archives={archives} onChange={setArchives} />
 
       {error && <div className="alert alert-error">{error}</div>}
 
@@ -259,9 +265,9 @@ export default function DevoirManagement() {
                   <td>{item.points_max} pts</td>
                   <td>{item.est_publie ? <span className="badge badge-active">Publié</span> : <span className="badge badge-inactive">Brouillon</span>}</td>
                   <td>
-                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{marginRight: '8px'}}>Modifier</button>
+                    {!archives && <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{marginRight: '8px'}}>Modifier</button>}
                     <Link to={`/devoirs/${item.id}/corrections`} className="btn btn-sm btn-primary" style={{marginRight: '8px'}}>Corrections</Link>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>
+                    {!archives && <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>}
                   </td>
                 </tr>
               ))}

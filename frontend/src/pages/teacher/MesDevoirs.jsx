@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../../services/api';
 import CodeEditor from '../../components/CodeEditor';
+import CaseArchives from '../../components/CaseArchives';
 
 export default function MesDevoirs() {
   const [items, setItems] = useState([]);
@@ -18,20 +19,24 @@ export default function MesDevoirs() {
   const [niveaux, setNiveaux] = useState([]);
   const [annees, setAnnees] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [archives, setArchives] = useState(false);
 
   useEffect(() => {
-    fetchData();
     api.get('/referentiel/filieres/').then((res) => setFilieres(res.data.results || res.data));
     api.get('/referentiel/niveaux/').then((res) => setNiveaux(res.data.results || res.data));
-    api.get('/referentiel/annees-academiques/').then((res) => setAnnees(res.data.results || res.data));
+    api.get('/referentiel/annees-academiques/').then((res) => setAnnees((res.data.results || res.data).filter((a) => !a.archivee)));
   }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchData(); }, [archives]);
 
   const fetchData = async () => {
     setLoading(true);
     try {
+      const config = { params: archives ? { archives: '1' } : {} };
       const [devoirsRes, soumissionsRes] = await Promise.all([
-        api.get('/programming/devoirs/'),
-        api.get('/programming/soumissions/'),
+        api.get('/programming/devoirs/', config),
+        api.get('/programming/soumissions/', config),
       ]);
       setItems(devoirsRes.data.results || devoirsRes.data);
       setSoumissions(soumissionsRes.data.results || soumissionsRes.data);
@@ -78,8 +83,10 @@ export default function MesDevoirs() {
     <div>
       <div className="page-header">
         <h1>Mes devoirs</h1>
-        <button className="btn btn-primary" onClick={() => setShowForm(true)}>+ Créer un devoir</button>
+        {!archives && <button className="btn btn-primary" onClick={() => setShowForm(true)}>+ Créer un devoir</button>}
       </div>
+
+      <CaseArchives archives={archives} onChange={setArchives} />
 
       {error && <div className="alert alert-error">{error}</div>}
 
@@ -216,7 +223,7 @@ export default function MesDevoirs() {
                   <td>
                     <Link to={`/devoirs/${item.id}`} className="btn btn-sm btn-secondary" style={{ marginRight: '8px' }}>Voir</Link>
                     <Link to={`/devoirs/${item.id}/corrections`} className="btn btn-sm btn-primary" style={{ marginRight: '8px' }}>Corrections</Link>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>
+                    {!archives && <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>}
                   </td>
                 </tr>
               ))}

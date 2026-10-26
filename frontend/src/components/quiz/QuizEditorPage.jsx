@@ -7,6 +7,7 @@ import AffectationQuiz from './AffectationQuiz';
 import AccesQuiz from './AccesQuiz';
 import SessionsQuiz from './SessionsQuiz';
 import { resumeCibles } from './cibles';
+import CaseArchives from '../CaseArchives';
 import QuestionEditeur from './QuestionEditeur';
 import SelecteurBanque from './SelecteurBanque';
 import { depuisApi, nouvelleQuestion, versContenu } from './questions';
@@ -58,19 +59,22 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
   const [periodes, setPeriodes] = useState([]);
   const [ecs, setEcs] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [archives, setArchives] = useState(false);
   const { user } = useAuth();
   const [validationRequise, setValidationRequise] = useState(false);
 
   const verrouille = Boolean(editingItem?.a_des_tentatives);
   const soumisAValidation = user?.role === 'enseignant' && (editingItem ? editingItem.validation_requise : validationRequise);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchItems(); }, [archives]);
+
   useEffect(() => {
-    fetchItems();
     api.get('/quiz/quizzes/validation/').then((res) => setValidationRequise(res.data.validation_requise)).catch(() => setValidationRequise(false));
     const liste = (res) => res.data.results || res.data;
     Promise.all([
       api.get('/referentiel/filieres/'), api.get('/referentiel/niveaux/'), api.get('/referentiel/annees-academiques/'),
-    ]).then(([f, n, a]) => { setFilieres(liste(f)); setNiveaux(liste(n)); setAnnees(liste(a)); })
+    ]).then(([f, n, a]) => { setFilieres(liste(f)); setNiveaux(liste(n)); setAnnees(liste(a).filter((x) => !x.archivee)); })
       .catch(() => setError('Erreur lors du chargement des listes de référence.'));
     chargerTout('/referentiel/periodes-evaluation/').then(setPeriodes).catch(() => setError('Erreur lors du chargement des périodes.'));
     chargerTout('/referentiel/ecs/').then(setEcs).catch(() => setError('Erreur lors du chargement des matières.'));
@@ -79,7 +83,7 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
   const fetchItems = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/quiz/quizzes/');
+      const res = await api.get('/quiz/quizzes/', { params: archives ? { archives: '1' } : {} });
       setItems(res.data.results || res.data);
     } catch (err) {
       setError(messageErreur(err, 'Erreur lors du chargement des quiz.'));
@@ -221,8 +225,10 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
     <div>
       <div className="page-header">
         <h1>{titre}</h1>
-        <button className="btn btn-primary" onClick={openCreate}>+ Créer un quiz</button>
+        {!archives && <button className="btn btn-primary" onClick={openCreate}>+ Créer un quiz</button>}
       </div>
+
+      <CaseArchives archives={archives} onChange={setArchives} />
 
       {error && <div className="alert alert-error">{error}</div>}
       {alerte && <div className="alert alert-error">{alerte}</div>}
@@ -408,10 +414,10 @@ export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
                   <td>{item.tentatives_autorisees}</td>
                   <td>{badgeStatut(item)}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
-                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{ marginRight: '8px' }}>Modifier</button>
+                    {!archives && <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{ marginRight: '8px' }}>Modifier</button>}
                     <Link className="btn btn-sm btn-outline" to={`/quiz/${item.id}/tentatives`} style={{ marginRight: '8px' }}>Tentatives</Link>
                     <Link className="btn btn-sm btn-outline" to={`/quiz/${item.id}/statistiques`} style={{ marginRight: '8px' }}>Statistiques</Link>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>
+                    {!archives && <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>}
                   </td>
                 </tr>
               ))}

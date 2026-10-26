@@ -18,6 +18,8 @@ from accounts.scoping import (
     q_filiere_niveau_etudiant, verifier_compte_du_perimetre, verifier_references_evaluation, MESSAGE_HORS_PERIMETRE,
 )
 from audit.services import log as audit_log
+from . import archives
+from .archives import ArchiveMixin
 from .models import (
     Etablissement, AnneeAcademique, Filiere, Niveau, UE, EC, Cours,
     Classe, Groupe, Inscription, EnseignantMatiere, AffectationEnseignant, Semestre, PeriodeEvaluation
@@ -206,10 +208,12 @@ L'équipe PEL"""
         })
 
 
-class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class AnneeAcademiqueViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = AnneeAcademique.objects.all()
     serializer_class = AnneeAcademiqueSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    annee_path = ''
+    actions_masquees = ()
     scope_path = 'etablissement'
     scope_etablissement_field = 'etablissement'
 
@@ -217,6 +221,18 @@ class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return qs.filter(etablissement_id=user.etablissement_id)
 
     etudiant_scope = enseignant_scope
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=(SUPERADMIN, ADMIN))])
+    def archiver(self, request, pk=None):
+        annee = self.get_object()
+        archives.archiver(annee, request)
+        return Response(self.get_serializer(annee).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=(SUPERADMIN, ADMIN))])
+    def desarchiver(self, request, pk=None):
+        annee = self.get_object()
+        archives.desarchiver(annee, request)
+        return Response(self.get_serializer(annee).data)
 
     @staticmethod
     def _creer_annee_et_filieres(data, etablissement):
@@ -288,6 +304,15 @@ class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         }, status=status.HTTP_201_CREATED)
 
 
+def _donnees_archivees_ec(**critere):
+    """Notes et affectations d'enseignants d'années archivées, emportées par la suppression d'une EC (ou de son UE)."""
+    from programming.models import NoteMatiere
+    return [
+        NoteMatiere.objects.filter(annee_academique__archivee=True, **critere),
+        EnseignantMatiere.objects.filter(classe__annee_academique__archivee=True, **critere),
+    ]
+
+
 class FiliereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Filiere.objects.select_related('etablissement').order_by('id')
     serializer_class = FiliereSerializer
@@ -300,6 +325,18 @@ class FiliereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def etudiant_scope(self, qs, user):
         return qs.filter(etablissement_id=user.etablissement_id)
+
+    def perform_destroy(self, instance):
+        from programming.models import Devoir, NoteMatiere
+        from quiz.models import Quiz
+        archivee = {'annee_academique__archivee': True}
+        archives.verifier_suppression([
+            Classe.objects.filter(filiere=instance, **archivee),
+            Quiz.objects.filter(filiere=instance, **archivee),
+            Devoir.objects.filter(filiere=instance, **archivee),
+            NoteMatiere.objects.filter(ec__ue__filiere=instance, **archivee),
+        ], 'filière')
+        super().perform_destroy(instance)
 
 
 class NiveauViewSet(viewsets.ModelViewSet):
@@ -346,6 +383,10 @@ class UEViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def etudiant_scope(self, qs, user):
         return qs.filter(q_filiere_niveau_etudiant(user))
 
+    def perform_destroy(self, instance):
+        archives.verifier_suppression(_donnees_archivees_ec(ec__ue=instance), 'UE')
+        super().perform_destroy(instance)
+
 
 class ECViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = EC.objects.select_related('ue').order_by('id')
@@ -370,6 +411,10 @@ class ECViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def etudiant_scope(self, qs, user):
         return qs.filter(q_filiere_niveau_etudiant(user, prefix='ue__'))
 
+    def perform_destroy(self, instance):
+        archives.verifier_suppression(_donnees_archivees_ec(ec=instance), 'EC')
+        super().perform_destroy(instance)
+
 
 class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Cours.objects.select_related('ec', 'ec__ue', 'ec__ue__filiere').order_by('id')
@@ -388,7 +433,8 @@ class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return qs.filter(q_filiere_niveau_etudiant(user, prefix='ec__ue__'))
 
 
-class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class ClasseViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'annee_academique'
     queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes__membres').order_by('id')
     serializer_class = ClasseSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
@@ -419,7 +465,8 @@ class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return super().perform_update(serializer, **kwargs)
 
 
-class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class GroupeViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'classe__annee_academique'
     queryset = Groupe.objects.select_related('classe', 'classe__filiere').prefetch_related('membres').order_by('id')
     serializer_class = GroupeSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
@@ -434,6 +481,7 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='membres')
     def ajouter_membres(self, request, pk=None):
         groupe = self.get_object()
+        self.verifier_ecriture(groupe)
         ids = request.data.get('etudiants') if isinstance(request.data, dict) else None
         if not isinstance(ids, list) or not ids:
             raise ValidationError({'etudiants': ["Indiquez au moins un étudiant."]})
@@ -458,6 +506,7 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['delete'], url_path=r'membres/(?P<etudiant_id>[0-9]+)')
     def retirer_membre(self, request, pk=None, etudiant_id=None):
         groupe = self.get_object()
+        self.verifier_ecriture(groupe)
         etudiant_id = int(etudiant_id)
         if not groupe.membres.filter(pk=etudiant_id).exists():
             raise NotFound("Cet étudiant n'est pas membre du groupe.")
@@ -467,7 +516,8 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class InscriptionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class InscriptionViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'classe__annee_academique'
     queryset = Inscription.objects.select_related('etudiant', 'classe').order_by('id')
     serializer_class = InscriptionSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
@@ -501,7 +551,8 @@ class InscriptionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         instance.delete()
 
 
-class EnseignantMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class EnseignantMatiereViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'classe__annee_academique'
     queryset = EnseignantMatiere.objects.select_related('enseignant', 'ec', 'classe').order_by('id')
     serializer_class = EnseignantMatiereSerializer
     permission_classes = [RolePermission(read=CREATEURS, write=GESTION)]
@@ -542,7 +593,8 @@ def _identifiant(params, cle):
     return valeur if valeur is not None and 1 <= valeur <= 2 ** 63 - 1 else None
 
 
-class SemestreViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class SemestreViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'annee_academique'
     queryset = Semestre.objects.select_related('annee_academique').order_by('date_debut', 'id')
     serializer_class = SemestreSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
@@ -567,7 +619,8 @@ class SemestreViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return super().perform_update(serializer, **kwargs)
 
 
-class PeriodeEvaluationViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class PeriodeEvaluationViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'semestre__annee_academique'
     queryset = PeriodeEvaluation.objects.select_related('semestre', 'semestre__annee_academique').order_by('date_debut', 'id')
     serializer_class = PeriodeEvaluationSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]

@@ -18,7 +18,7 @@ export default function GestionNotes() {
 
   useEffect(() => {
     api.get('/referentiel/classes/').then((res) => setClasses(res.data.results || res.data));
-    api.get('/referentiel/annees-academiques/').then((res) => setAnnees(res.data.results || res.data));
+    api.get('/referentiel/annees-academiques/').then((res) => setAnnees((res.data.results || res.data).filter((a) => !a.archivee)));
   }, []);
 
   useEffect(() => {

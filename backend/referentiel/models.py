@@ -28,6 +28,10 @@ class AnneeAcademique(models.Model):
     date_debut = models.DateField()
     date_fin = models.DateField()
     est_active = models.BooleanField(default=False)
+    archivee = models.BooleanField(default=False)
+    archivee_le = models.DateTimeField(null=True, blank=True)
+    archivee_par = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True,
+                                     related_name='annees_archivees')
     etablissement = models.ForeignKey(Etablissement, on_delete=models.CASCADE, null=True, blank=True, related_name='annees_academiques')
 
     class Meta:

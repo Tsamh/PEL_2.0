@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
+import { messageErreur } from '../services/erreurs';
 
 export default function AnneesAcademiques() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const isSuperAdmin = user?.role === 'superadmin';
+  const peutArchiver = isAdmin || isSuperAdmin;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -67,6 +69,20 @@ export default function AnneesAcademiques() {
       } catch (err) {
         setError('Erreur lors de la suppression.');
       }
+    }
+  };
+
+  const handleArchivage = async (item, archiver) => {
+    const message = archiver
+      ? `Archiver l'année ${item.libelle} ? Ses données passeront en lecture seule.`
+      : `Désarchiver l'année ${item.libelle} ?`;
+    if (!window.confirm(message)) return;
+    setError('');
+    try {
+      const res = await api.post(`/referentiel/annees-academiques/${item.id}/${archiver ? 'archiver' : 'desarchiver'}/`);
+      setItems((liste) => liste.map((a) => (a.id === item.id ? res.data : a)));
+    } catch (err) {
+      setError(messageErreur(err, archiver ? "Erreur lors de l'archivage." : 'Erreur lors du désarchivage.'));
     }
   };
 
@@ -142,10 +158,21 @@ export default function AnneesAcademiques() {
                   <td>{item.date_debut}</td>
                   <td>{item.date_fin}</td>
                   <td>{item.etablissement_nom || 'Global'}</td>
-                  <td>{item.est_active ? <span className="badge badge-active">Active</span> : <span className="badge badge-inactive">Inactive</span>}</td>
                   <td>
-                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{marginRight: '8px'}}>Modifier</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>
+                    {item.archivee
+                      ? <span className="badge badge-inactive">Archivée le {new Date(item.archivee_le).toLocaleDateString('fr-FR')}</span>
+                      : item.est_active ? <span className="badge badge-active">Active</span> : <span className="badge badge-inactive">Inactive</span>}
+                  </td>
+                  <td>
+                    {!item.archivee && (
+                      <>
+                        <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{marginRight: '8px'}}>Modifier</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)} style={{marginRight: '8px'}}>Supprimer</button>
+                      </>
+                    )}
+                    {peutArchiver && (item.archivee
+                      ? <button className="btn btn-sm btn-secondary" onClick={() => handleArchivage(item, false)}>Désarchiver</button>
+                      : <button className="btn btn-sm btn-secondary" onClick={() => handleArchivage(item, true)}>Archiver</button>)}
                   </td>
                 </tr>
               ))}

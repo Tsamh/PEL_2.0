@@ -51,6 +51,6 @@ class SuiviAbsencesView(APIView):
             raise ValidationError({'quiz': ["Indiquez le quiz."]})
         groupe = request.query_params.get('groupe')
         regroupement = _regroupement(request) if groupe else None
-        qs = suivi.quizzes_suivis(request.user, {})
+        qs = suivi.quizzes_suivis(request.user, {}, masquer=False)
         quiz = get_object_or_404(qs, pk=pk)
         return Response(suivi.absences(_contexte(request, qs.filter(pk=pk)), quiz, regroupement, groupe))

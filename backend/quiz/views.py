@@ -11,6 +11,7 @@ from accounts.scoping import (
     verifier_filiere_du_perimetre, verifier_references_evaluation,
 )
 from audit.services import log as audit_log
+from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_archivee
 from . import acces, passage, statistiques as stats, validation
 from .correction import arrondir, en_decimal, recalculer_score
 from .exceptions import Conflit, verifier_quiz_modifiable
@@ -27,7 +28,8 @@ def etablissement_evaluation(instance):
     return getattr(instance.cree_par, 'etablissement', None)
 
 
-class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class QuizViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'annee_academique'
     queryset = (
         Quiz.objects.select_related('filiere__etablissement', 'niveau', 'annee_academique', 'cree_par__etablissement', 'valide_par',
                         'periode', 'ec')
@@ -61,18 +63,21 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=CREATEURS)])
     def soumettre_validation(self, request, pk=None):
         quiz = self.get_object()
+        self.verifier_ecriture(quiz)
         validation.soumettre(quiz, request)
         return Response(self.get_serializer(quiz).data)
 
     @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=GESTION)])
     def valider(self, request, pk=None):
         quiz = self.get_object()
+        self.verifier_ecriture(quiz)
         validation.valider(quiz, request)
         return Response(self.get_serializer(quiz).data)
 
     @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=GESTION)])
     def refuser(self, request, pk=None):
         quiz = self.get_object()
+        self.verifier_ecriture(quiz)
         motif = request.data.get('motif') if isinstance(request.data, dict) else None
         validation.refuser(quiz, request, motif)
         return Response(self.get_serializer(quiz).data)
@@ -123,6 +128,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[IsEtudiant])
     def demarrer(self, request, pk=None):
         quiz = self.get_object()
+        self.verifier_ecriture(quiz)
         if quiz.code_acces and not passage.reprise_possible(quiz, request.user):
             acces.verifier_code(request, quiz)
         tentative, creee = passage.demarrer(quiz, request.user)
@@ -148,6 +154,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=CREATEURS)])
     def publier_resultats(self, request, pk=None):
         quiz = self.get_object()
+        self.verifier_ecriture(quiz)
         if quiz.publication_resultats != Quiz.PUBLICATION_DIFFEREE:
             raise Conflit("Les résultats de ce quiz sont publiés automatiquement après chaque soumission.")
         if quiz.resultats_publies:
@@ -160,6 +167,7 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post', 'delete'], permission_classes=[RolePermission(write=CREATEURS)])
     def code_acces(self, request, pk=None):
         quiz = self.get_object()
+        self.verifier_ecriture(quiz)
         if request.method == 'DELETE':
             quiz.code_acces = ''
             quiz.save(update_fields=['code_acces'])
@@ -191,7 +199,8 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
             permission_classes=[RolePermission(read=CREATEURS)])
     def vue_ensemble(self, request):
         page = self.paginate_queryset(
-            stats.quizzes_du_perimetre(request.user).prefetch_related('questions').order_by('-date_creation', '-id'))
+            filtrer_archives(stats.quizzes_du_perimetre(request.user), 'annee_academique', request.query_params)
+            .prefetch_related('questions').order_by('-date_creation', '-id'))
         passage.cloturer_expirees(TentativeQuiz.objects.filter(quiz__in=[q.pk for q in page]))
         return self.get_paginated_response([stats.resume_quiz(q) for q in page])
 
@@ -206,7 +215,8 @@ class QuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
                       etablissement=etablissement_evaluation(instance), details=details)
 
 
-class QuestionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class QuestionViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'quiz__annee_academique'
     queryset = Question.objects.prefetch_related('choix').all()
     serializer_class = QuestionReadSerializer
     permission_classes = [RolePermission(read=CREATEURS, write=CREATEURS)]
@@ -242,7 +252,8 @@ class QuestionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
             validation.contenu_change_hors_formulaire(quiz, self.request.user)
 
 
-class ChoixViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class ChoixViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'question__quiz__annee_academique'
     queryset = Choix.objects.all()
     serializer_class = ChoixSerializer
     permission_classes = [RolePermission(read=CREATEURS, write=CREATEURS)]
@@ -284,7 +295,10 @@ class TentativeViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsEtudiant]
 
     def get_queryset(self):
-        return TentativeQuiz.objects.filter(etudiant=self.request.user).select_related('quiz')
+        qs = TentativeQuiz.objects.filter(etudiant=self.request.user).select_related('quiz__annee_academique')
+        if self.action == 'list':
+            qs = filtrer_archives(qs, 'quiz__annee_academique', self.request.query_params)
+        return qs
 
     def get_object(self):
         tentative = super().get_object()
@@ -298,20 +312,24 @@ class TentativeViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=['put'])
     def repondre(self, request, pk=None):
         tentative = super().get_object()
+        verifier_non_archivee(tentative.quiz.annee_academique)
         passage.enregistrer_reponse(tentative, request.data)
         return Response({'enregistre': True})
 
     @action(detail=True, methods=['post'])
     def soumettre(self, request, pk=None):
         tentative = super().get_object()
+        verifier_non_archivee(tentative.quiz.annee_academique)
         if tentative.statut == TentativeQuiz.SOUMISE:
             raise Conflit("Cette tentative est déjà soumise.")
         passage.soumettre(tentative, auto=passage.est_expiree(tentative), request=request)
         return Response(self.get_serializer(tentative).data)
 
 
-class ReponseViewSet(EtablissementScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
+class ReponseViewSet(ArchiveMixin, EtablissementScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
     """Réponses courtes des tentatives soumises, pour la validation par l'enseignant."""
+    annee_path = 'tentative__quiz__annee_academique'
+    parent_params = ('quiz',)
     queryset = (
         ReponseQuiz.objects
         .filter(question__type_question='courte', tentative__statut=TentativeQuiz.SOUMISE)
@@ -341,6 +359,7 @@ class ReponseViewSet(EtablissementScopedMixin, mixins.ListModelMixin, viewsets.G
     @action(detail=True, methods=['post'])
     def valider(self, request, pk=None):
         reponse = self.get_object()
+        self.verifier_ecriture(reponse)
         maximum = reponse.question.points
         brut = request.data.get('score') if isinstance(request.data, dict) else None
         score = en_decimal(brut)

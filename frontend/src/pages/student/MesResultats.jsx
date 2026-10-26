@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import CaseArchives from '../../components/CaseArchives';
 
 export default function MesResultats() {
   const [soumissions, setSoumissions] = useState([]);
@@ -7,16 +8,19 @@ export default function MesResultats() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('devoirs');
+  const [archives, setArchives] = useState(false);
 
-  useEffect(() => { fetchAll(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchAll(); }, [archives]);
 
   const fetchAll = async () => {
     setLoading(true);
     setError('');
     try {
+      const config = { params: archives ? { archives: '1' } : {} };
       const [soumRes, notesRes] = await Promise.all([
-        api.get('/programming/soumissions/'),
-        api.get('/programming/notes/mes_notes/'),
+        api.get('/programming/soumissions/', config),
+        api.get('/programming/notes/mes_notes/', config),
       ]);
       setSoumissions(soumRes.data.results || soumRes.data);
       setNotes(notesRes.data);
@@ -32,6 +36,8 @@ export default function MesResultats() {
       <div className="page-header">
         <h1>Mes résultats</h1>
       </div>
+
+      <CaseArchives archives={archives} onChange={setArchives} />
 
       {error && <div className="alert alert-error">{error}</div>}
 

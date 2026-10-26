@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from accounts.permissions import ETUDIANT
 from accounts.scoping import en_entier
+from referentiel.archives import filtrer_archives
 from referentiel.models import Classe, Inscription
 
 from . import fenetres, passage
@@ -43,11 +44,13 @@ class Contexte:
     classes: dict
 
 
-def quizzes_suivis(user, params):
+def quizzes_suivis(user, params, masquer=True):
     """Quiz du périmètre publiés ou ayant des tentatives, filtrés ; un filtre invalide est ignoré."""
     qs = quizzes_du_perimetre(user).filter(
         Q(est_publie=True) | Q(pk__in=TentativeQuiz.objects.values('quiz_id'))
     )
+    if masquer:
+        qs = filtrer_archives(qs, 'annee_academique', params)
     for cle, champ in FILTRES.items():
         valeur = en_entier(params.get(cle))
         if valeur is not None:

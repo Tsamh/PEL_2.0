@@ -47,7 +47,8 @@ export default function Calendrier() {
 
   useEffect(() => {
     chargerTout('/referentiel/annees-academiques/')
-      .then((liste) => {
+      .then((toutes) => {
+        const liste = toutes.filter((a) => !a.archivee);
         setAnnees(liste);
         const active = liste.find((a) => a.est_active) || liste[0];
         if (active) setAnneeId(String(active.id));
