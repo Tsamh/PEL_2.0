@@ -3,7 +3,7 @@ from urllib.parse import urlsplit
 from django.db import transaction
 from rest_framework import serializers
 
-from quiz import validation
+from quiz import fenetres, validation
 from quiz.acces import CLES_CIBLES, verifier_cibles
 from quiz.exceptions import Conflit
 from quiz.models import TagQuestion
@@ -305,13 +305,24 @@ class DevoirEtudiantSerializer(serializers.ModelSerializer):
     langage_display = serializers.CharField(source='get_langage_display', read_only=True)
     bareme = serializers.DecimalField(max_digits=8, decimal_places=2, read_only=True)
     exercices = ExerciceEtudiantSerializer(many=True, read_only=True)
+    etat = serializers.SerializerMethodField()
 
     class Meta:
         model = Devoir
         fields = ['id', 'titre', 'objectifs', 'consignes', 'ressources', 'langage', 'langage_display',
                   'filiere', 'filiere_libelle', 'niveau', 'niveau_libelle', 'annee_academique', 'annee_libelle',
-                  'ec', 'ec_libelle', 'date_debut', 'date_fin', 'bareme', 'cree_par_nom', 'exercices']
+                  'ec', 'ec_libelle', 'date_debut', 'date_fin', 'bareme', 'cree_par_nom', 'exercices', 'etat']
         read_only_fields = fields
+
+    def get_etat(self, devoir):
+        etudiant = self.context['request'].user
+        fenetre = fenetres.fenetre(devoir, etudiant)
+        ouverture, fermeture = fenetre.affichee()
+        return {
+            'ouvert': fenetre.ouverte is not None,
+            'fenetre': {'ouverture': ouverture, 'fermeture': fermeture, 'prochaine_ouverture': fenetre.prochaine_ouverture},
+            'soumis': devoir.soumissions.filter(etudiant=etudiant).exists(),
+        }
 
     def get_cree_par_nom(self, devoir):
         return devoir.cree_par.get_full_name() if devoir.cree_par_id else ''

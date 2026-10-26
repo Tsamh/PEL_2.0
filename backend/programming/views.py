@@ -19,6 +19,7 @@ from accounts.scoping import (
 )
 from audit.services import log as audit_log
 from quiz import acces
+from quiz.statistiques import etudiants_affectes
 from quiz.views import etablissement_evaluation
 from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_archivee
 from .models import Devoir, SoumissionDevoir, NoteMatiere
@@ -93,6 +94,17 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
         if details is not None:
             audit_log(self.request, 'affectation_evaluation', cible=instance,
                       etablissement=etablissement_evaluation(instance), details={**details, 'type': 'devoir'})
+
+    @action(detail=True, methods=['get'], permission_classes=[RolePermission(read=CREATEURS)])
+    def candidats_rattrapage(self, request, pk=None):
+        """Étudiants concernés (affectés ou ayant soumis) qui n'ont pas de soumission."""
+        devoir = self.get_object()
+        ont_soumis = set(devoir.soumissions.values_list('etudiant_id', flat=True))
+        candidats = [
+            {'id': e.pk, 'nom': e.get_full_name() or e.username}
+            for e in etudiants_affectes(devoir) if e.pk not in ont_soumis
+        ]
+        return Response(sorted(candidats, key=lambda c: c['nom'].lower()))
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def execute(self, request, pk=None):
