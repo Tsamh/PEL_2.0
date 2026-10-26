@@ -1,4 +1,4 @@
-from django.db import migrations
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
@@ -8,6 +8,12 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
+        # Défaut vide : au retour, la colonne est recréée sur des soumissions existantes, puis remplie par 0006.
+        migrations.AlterField(
+            model_name="soumissiondevoir",
+            name="code_soumis",
+            field=models.TextField(blank=True, default=""),
+        ),
         migrations.RemoveField(
             model_name="devoir",
             name="code_initial",
