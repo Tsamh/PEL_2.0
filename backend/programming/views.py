@@ -103,7 +103,7 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
         if not code.strip():
             return Response({"error": "Le code ne peut pas être vide"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Provisoire (refait en tâche 3) : tests publics de l'exercice demandé, sinon du premier exercice.
+        # Tests publics de l'exercice demandé, sinon du premier exercice.
         exercices = devoir.exercices.all()
         exercice_id = en_entier(request.data.get('exercice'))
         exercice = exercices.filter(pk=exercice_id).first() if exercice_id is not None else exercices.first()

@@ -229,6 +229,72 @@ class DevoirsApiTests(TestCase):
         self.assertFalse(PROFIL_DEVOIR.contenu_modifie(devoir, {'consignes': devoir.consignes}))
         self.assertFalse(PROFIL_DEVOIR.contenu_modifie(None, {'titre': 'x'}))
 
+    def test_contenu_conserve_a_l_identique(self):
+        res = self.creer(exercices=[exercice(
+            enonce='  def f():\n    pass\n', contraintes='\n  Aucune.\n',
+            tests=[{'entree': '3\n', 'sortie_attendue': '  *\n ***\n', 'public': True}])])
+        self.assertEqual(res.status_code, 201, res.data)
+        test = CasDeTest.objects.get(exercice__devoir_id=res.data['id'])
+        self.assertEqual((test.entree, test.sortie_attendue), ('3\n', '  *\n ***\n'))
+        exo = test.exercice
+        self.assertEqual((exo.enonce, exo.contraintes), ('  def f():\n    pass\n', '\n  Aucune.\n'))
+
+    def test_renvoi_identique_de_donnees_non_rognees_apres_soumission(self):
+        devoir = Devoir.objects.get(pk=self.creer().data['id'])
+        exo = devoir.exercices.first()
+        exo.enonce = '  Énoncé indenté\n'
+        exo.save()
+        CasDeTest.objects.filter(exercice=exo).update(entree='3\n', sortie_attendue='  *\n')
+        SoumissionDevoir.objects.create(devoir=devoir, etudiant=self.a.etu)
+        self.a.etab.validation_quiz_requise = True
+        self.a.etab.save()
+        Devoir.objects.filter(pk=devoir.pk).update(statut_validation=Devoir.VALIDEE, est_publie=True)
+        lu = client_for(self.a.ens).get(f'{P}/{devoir.id}/').data
+        res = self.patch(devoir, {'exercices': lu['exercices'], 'date_debut': '2026-11-01T08:00:00Z',
+                                  'date_fin': '2026-11-10T18:00:00Z'})
+        self.assertEqual(res.status_code, 200, res.data)
+        devoir.refresh_from_db()
+        self.assertEqual(devoir.statut_validation, Devoir.VALIDEE)
+        self.assertTrue(devoir.est_publie)
+        self.assertEqual(CasDeTest.objects.filter(exercice=exo).first().entree, '3\n')
+
+    def test_verrou_un_seul_test_cache_modifie(self):
+        devoir = Devoir.objects.get(pk=self.creer().data['id'])
+        SoumissionDevoir.objects.create(devoir=devoir, etudiant=self.a.etu)
+        for champ, valeur in (('sortie_attendue', 'autre'), ('public', True), ('poids', 5)):
+            with self.subTest(champ=champ):
+                lu = client_for(self.a.ens).get(f'{P}/{devoir.id}/').data
+                lu['exercices'][0]['tests'][1][champ] = valeur
+                res = self.patch(devoir, {'exercices': lu['exercices']})
+                self.assertEqual(res.status_code, 409)
+                self.assertEqual(res.data['detail'], MESSAGE_VERROU)
+
+    def test_changement_de_contenu_remet_un_devoir_valide_en_brouillon(self):
+        self.a.etab.validation_quiz_requise = True
+        self.a.etab.save()
+        devoir = Devoir.objects.get(pk=self.creer().data['id'])
+        Devoir.objects.filter(pk=devoir.pk).update(statut_validation=Devoir.VALIDEE, est_publie=True)
+        res = self.patch(devoir, {'consignes': 'Consignes modifiées'})
+        self.assertEqual(res.status_code, 200, res.data)
+        devoir.refresh_from_db()
+        self.assertEqual(devoir.statut_validation, Devoir.BROUILLON)
+        self.assertFalse(devoir.est_publie)
+
+    def test_exercices_et_tests_non_listes(self):
+        self.assertEqual(self.creer(exercices='abc').status_code, 400)
+        self.assertEqual(self.creer(exercices={'titre': 'x'}).status_code, 400)
+        self.assertEqual(self.creer(exercices=[exercice(tests='abc')]).status_code, 400)
+        self.assertEqual(self.creer(exercices=[exercice(tests={'entree': '1'})]).status_code, 400)
+
+    def test_competence_inexistante_et_autre_etablissement_meme_erreur(self):
+        erreurs = []
+        for pk in (self.competence_b.id, 999999):
+            res = self.creer(exercices=[exercice(competences=[pk])])
+            self.assertEqual(res.status_code, 400)
+            erreurs.append(str(res.data['exercices']))
+        self.assertEqual(erreurs[0], erreurs[1])
+        self.assertNotIn(str(self.competence_b.id), erreurs[0])
+
 
 class VisibiliteEtudiantTests(TestCase):
     @classmethod

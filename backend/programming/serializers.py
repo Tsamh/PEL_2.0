@@ -11,6 +11,7 @@ from .models import CasDeTest, Devoir, Exercice, SoumissionDevoir, NoteMatiere
 from .validation import PROFIL_DEVOIR, exercices_modifies
 
 MESSAGE_VERROU = "Ce devoir a déjà des soumissions : ses exercices et ses tests ne peuvent plus être modifiés."
+MESSAGE_COMPETENCE = "Une compétence choisie n'est pas disponible pour cet établissement."
 MESSAGE_SANS_EXERCICE = "Ajoutez au moins un exercice avant de publier le devoir."
 RESSOURCES_MAX = 20
 LIBELLE_MAX = 200
@@ -94,13 +95,16 @@ class CasDeTestSerializer(serializers.ModelSerializer):
         model = CasDeTest
         fields = ['id', 'ordre', 'entree', 'sortie_attendue', 'public', 'poids']
         read_only_fields = ['id']
+        # Le contenu des tests est conservé à l'identique (retours à la ligne et indentation compris).
+        extra_kwargs = {'entree': {'trim_whitespace': False}, 'sortie_attendue': {'trim_whitespace': False}}
 
 
 class ExerciceSerializer(serializers.ModelSerializer):
     """Exercice saisi dans le formulaire du devoir (vue enseignant : solution et tous les tests)."""
     tests = CasDeTestSerializer(many=True, required=False)
     competences = serializers.PrimaryKeyRelatedField(
-        many=True, required=False, queryset=TagQuestion.objects.filter(type=TagQuestion.COMPETENCE))
+        many=True, required=False, queryset=TagQuestion.objects.filter(type=TagQuestion.COMPETENCE),
+        error_messages={'does_not_exist': MESSAGE_COMPETENCE, 'incorrect_type': MESSAGE_COMPETENCE})
     competences_detail = serializers.SerializerMethodField()
 
     class Meta:
@@ -108,6 +112,7 @@ class ExerciceSerializer(serializers.ModelSerializer):
         fields = ['id', 'ordre', 'titre', 'enonce', 'contraintes', 'exemples', 'fichiers_initiaux', 'solution',
                   'points', 'difficulte', 'competences', 'competences_detail', 'tests']
         read_only_fields = ['id']
+        extra_kwargs = {'enonce': {'trim_whitespace': False}, 'contraintes': {'trim_whitespace': False}}
 
     def get_competences_detail(self, exercice):
         return [{'id': t.id, 'libelle': t.libelle} for t in exercice.competences.all()]
@@ -205,12 +210,13 @@ class DevoirSerializer(serializers.ModelSerializer):
         else:
             etablissement = self.instance.etablissement if self.instance is not None else None
         etablissement_id = etablissement.pk if etablissement is not None else None
+        # Même forme et même message qu'une compétence inexistante : rien ne révèle les compétences des autres établissements.
         erreurs = [
-            f"La compétence {tag.pk} n'est pas disponible pour cet établissement."
-            for exercice in attrs.get('exercices', []) for tag in exercice.get('competences', [])
-            if tag.etablissement_id != etablissement_id
+            {'competences': [serializers.ErrorDetail(MESSAGE_COMPETENCE, code='does_not_exist')]}
+            if any(tag.etablissement_id != etablissement_id for tag in exercice.get('competences', [])) else {}
+            for exercice in attrs.get('exercices', [])
         ]
-        if erreurs:
+        if any(erreurs):
             raise serializers.ValidationError({'exercices': erreurs})
 
     def _verifier_exercices_pour_publier(self, attrs):
@@ -252,11 +258,13 @@ class DevoirSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         exercices_data = validated_data.pop('exercices', None)
         cibles_data = {cle: validated_data.pop(cle) for cle in CLES_CIBLES if cle in validated_data}
-        # Des exercices renvoyés à l'identique ne sont pas réécrits : les réponses qui les citent restent valables.
-        remplacer = exercices_data is not None and exercices_modifies(instance, exercices_data)
-        if remplacer and instance.soumissions.exists():
-            raise Conflit(MESSAGE_VERROU)
         with transaction.atomic():
+            # Le devoir est verrouillé : une soumission ne peut pas apparaître entre le contrôle et le remplacement.
+            Devoir.objects.select_for_update().get(pk=instance.pk)
+            # Des exercices renvoyés à l'identique ne sont pas réécrits : les réponses qui les citent restent valables.
+            remplacer = exercices_data is not None and exercices_modifies(instance, exercices_data)
+            if remplacer and instance.soumissions.exists():
+                raise Conflit(MESSAGE_VERROU)
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
             instance.save()
