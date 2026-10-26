@@ -99,6 +99,25 @@ class DevoirsApiTests(TestCase):
         self.assertFalse(Exercice.objects.filter(pk__in=anciens).exists())
         self.assertEqual(CasDeTest.objects.filter(exercice__devoir=devoir).count(), 1)
 
+    def test_au_plus_50_exercices(self):
+        res = self.creer(exercices=[exercice(f'Exercice {i}', tests=[]) for i in range(51)])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(str(res.data['exercices'][0]), "Un devoir compte au plus 50 exercices.")
+
+    def test_au_plus_100_tests_par_exercice(self):
+        tests = [{'entree': str(i), 'sortie_attendue': str(i), 'public': True} for i in range(101)]
+        res = self.creer(exercices=[exercice(tests=tests)])
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(str(res.data['exercices'][0]['tests'][0]), "Un exercice compte au plus 100 tests.")
+
+    def test_bareme_maximal_relu_sans_erreur(self):
+        res = self.creer(exercices=[exercice(f'Exercice {i}', points='9999.99', tests=[]) for i in range(50)])
+        self.assertEqual(res.status_code, 201, res.data)
+        lu = client_for(self.a.ens).get(f'{P}/{res.data["id"]}/')
+        self.assertEqual(lu.status_code, 200)
+        self.assertEqual(lu.data['bareme'], '499999.50')
+        self.assertEqual(client_for(self.a.ens).get(f'{P}/').status_code, 200)
+
     def test_bareme_somme_des_points(self):
         res = self.creer(exercices=[exercice(points='2.5'), exercice(points='7.25'), exercice(points='0.25')])
         self.assertEqual(res.data['bareme'], '10.00')

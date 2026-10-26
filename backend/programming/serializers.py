@@ -91,6 +91,10 @@ def valider_exemples(valeur):
     return exemples
 
 
+EXERCICES_MAX = 50
+TESTS_MAX = 100
+
+
 class CasDeTestSerializer(serializers.ModelSerializer):
     class Meta:
         model = CasDeTest
@@ -127,6 +131,11 @@ class ExerciceSerializer(serializers.ModelSerializer):
     def validate_solution(self, valeur):
         return valider_fichiers(valeur)
 
+    def validate_tests(self, valeur):
+        if len(valeur) > TESTS_MAX:
+            raise serializers.ValidationError(f"Un exercice compte au plus {TESTS_MAX} tests.")
+        return valeur
+
 
 def _creer_exercices(devoir, exercices_data):
     for i, e_data in enumerate(exercices_data):
@@ -155,7 +164,7 @@ class DevoirSerializer(serializers.ModelSerializer):
     periode_libelle = serializers.SerializerMethodField()
     ec_libelle = serializers.SerializerMethodField()
     langage_display = serializers.CharField(source='get_langage_display', read_only=True)
-    bareme = serializers.DecimalField(max_digits=8, decimal_places=2, read_only=True)
+    bareme = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     nb_exercices = serializers.SerializerMethodField()
     classes_detail = serializers.SerializerMethodField()
     groupes_detail = serializers.SerializerMethodField()
@@ -203,6 +212,11 @@ class DevoirSerializer(serializers.ModelSerializer):
 
     def validate_ressources(self, valeur):
         return valider_ressources(valeur)
+
+    def validate_exercices(self, valeur):
+        if len(valeur) > EXERCICES_MAX:
+            raise serializers.ValidationError(f"Un devoir compte au plus {EXERCICES_MAX} exercices.")
+        return valeur
 
     def _verifier_competences(self, acteur, attrs):
         """Les compétences d'un exercice sont celles de l'établissement du devoir ; le message ne cite que l'identifiant."""
@@ -305,7 +319,7 @@ class DevoirEtudiantSerializer(serializers.ModelSerializer):
     annee_libelle = serializers.CharField(source='annee_academique.libelle', read_only=True, default=None)
     ec_libelle = serializers.SerializerMethodField()
     langage_display = serializers.CharField(source='get_langage_display', read_only=True)
-    bareme = serializers.DecimalField(max_digits=8, decimal_places=2, read_only=True)
+    bareme = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     exercices = ExerciceEtudiantSerializer(many=True, read_only=True)
     etat = serializers.SerializerMethodField()
 
@@ -363,7 +377,7 @@ def valider_reponses(devoir, valeur):
 class SoumissionDevoirSerializer(serializers.ModelSerializer):
     etudiant_nom = serializers.CharField(source='etudiant.get_full_name', read_only=True)
     devoir_titre = serializers.CharField(source='devoir.titre', read_only=True)
-    bareme = serializers.DecimalField(source='devoir.bareme', max_digits=8, decimal_places=2, read_only=True)
+    bareme = serializers.DecimalField(source='devoir.bareme', max_digits=12, decimal_places=2, read_only=True)
     reponses = serializers.SerializerMethodField()
 
     class Meta:
