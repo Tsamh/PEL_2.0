@@ -19,6 +19,7 @@ from accounts.scoping import (
 )
 from audit.services import log as audit_log
 from quiz.views import etablissement_evaluation
+from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_archivee
 from .models import Devoir, SoumissionDevoir, NoteMatiere
 from .serializers import DevoirSerializer, DevoirSerializerPublic, SoumissionDevoirSerializer, SoumissionDevoirUpdateSerializer, NoteMatiereSerializer
 
@@ -29,7 +30,8 @@ def devoirs_visibles_etudiant(user):
     return Devoir.objects.filter(est_publie=True, filiere_id__in=filieres_etudiant(user))
 
 
-class DevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'annee_academique'
     queryset = Devoir.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par').all()
     serializer_class = DevoirSerializer
     permission_classes = [RolePermission(read=TOUS_LES_ROLES, write=CREATEURS)]
@@ -107,7 +109,8 @@ class DevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return Response(result)
 
 
-class SoumissionDevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'devoir__annee_academique'
     queryset = SoumissionDevoir.objects.select_related('devoir', 'etudiant').all()
     serializer_class = SoumissionDevoirSerializer
 
@@ -145,6 +148,7 @@ class SoumissionDevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         devoir = serializer.validated_data['devoir']
         if not devoirs_visibles_etudiant(self.request.user).filter(pk=devoir.pk).exists():
             raise ValidationError({'detail': "Devoir introuvable."})
+        verifier_non_archivee(devoir.annee_academique)
         if devoir.date_fin and timezone.now() > devoir.date_fin:
             raise ValidationError("Le délai de soumission pour ce devoir est dépassé.")
         return super().perform_create(serializer, etudiant=self.request.user, **kwargs)
@@ -152,6 +156,7 @@ class SoumissionDevoirViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def corriger(self, request, pk=None):
         soumission = self.get_object()
+        self.verifier_ecriture(soumission)
         avant = soumission.score
         score = request.data.get('score')
         commentaire = request.data.get('commentaire', '')
@@ -339,7 +344,8 @@ def _note_valide(valeur):
     return isinstance(valeur, (int, float)) and not isinstance(valeur, bool) and 0 <= valeur <= 20
 
 
-class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class NoteMatiereViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'annee_academique'
     queryset = NoteMatiere.objects.select_related('etudiant', 'ec', 'classe', 'annee_academique').all()
     serializer_class = NoteMatiereSerializer
     permission_classes = [RolePermission(read=TOUS_LES_ROLES, write=CREATEURS)]
@@ -420,6 +426,7 @@ class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         classe = classes_du_perimetre(user).filter(pk=classe_id).first()
         if classe is None:
             return Response({"error": "Classe introuvable."}, status=status.HTTP_404_NOT_FOUND)
+        verifier_non_archivee(classe.annee_academique)
         if not ec_autorisee_pour_classe(user, classe, ec_id):
             return Response({"error": "Matière introuvable pour cette classe."}, status=status.HTTP_404_NOT_FOUND)
         if str(annee_id) != str(classe.annee_academique_id):
@@ -474,6 +481,7 @@ class NoteMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         from django.db.models import Avg, F, ExpressionWrapper, FloatField
 
         notes = NoteMatiere.objects.filter(etudiant=request.user).select_related('ec', 'classe', 'annee_academique')
+        notes = filtrer_archives(notes, 'annee_academique', request.query_params)
         data = []
         for note in notes:
             devoirs_ec = Devoir.objects.filter(ec=note.ec, est_publie=True)
