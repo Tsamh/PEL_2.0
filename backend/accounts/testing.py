@@ -32,7 +32,7 @@ def _build_etablissement(suffix, niveau):
         Inscription, AffectationEnseignant, EnseignantMatiere,
     )
     from quiz.models import Quiz, Question, Choix
-    from programming.models import Devoir
+    from programming.models import CasDeTest, Devoir, Exercice
 
     etab = Etablissement.objects.create(code=f'ET{suffix}', nom=f'Etablissement {suffix}')
     admin = make_user(f'admin{suffix}', 'admin', etab)
@@ -66,13 +66,18 @@ def _build_etablissement(suffix, niveau):
 
     devoir = Devoir.objects.create(
         titre=f'Devoir {suffix}', filiere=filiere, niveau=niveau, annee_academique=annee,
-        ec=ec, est_publie=True, cree_par=ens, solution='print(4)',
-        test_cases=[{'input': '', 'expected_output': '4'}],
+        ec=ec, est_publie=True, cree_par=ens,
     )
+    devoir.classes.add(classe)
+    exercice = Exercice.objects.create(
+        devoir=devoir, ordre=1, titre='Afficher 4', points=20, fichiers_initiaux=[],
+        solution=[{'nom': 'main.py', 'contenu': 'print(4)'}],
+    )
+    CasDeTest.objects.create(exercice=exercice, ordre=1, entree='', sortie_attendue='4', public=True)
     return SimpleNamespace(
         etab=etab, admin=admin, resp=resp, ens=ens, etu=etu, annee=annee,
         filiere=filiere, ue=ue, ec=ec, classe=classe, quiz=quiz,
-        question=question, devoir=devoir,
+        question=question, devoir=devoir, exercice=exercice,
     )
 
 

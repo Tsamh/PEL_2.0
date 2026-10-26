@@ -85,8 +85,17 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
         if not code.strip():
             return Response({"error": "Le code ne peut pas être vide"}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Provisoire (refait en tâche 3) : tests publics de l'exercice demandé, sinon du premier exercice.
+        exercices = devoir.exercices.all()
+        exercice_id = en_entier(request.data.get('exercice'))
+        exercice = exercices.filter(pk=exercice_id).first() if exercice_id is not None else exercices.first()
+        test_cases = [
+            {'input': t.entree, 'expected_output': t.sortie_attendue}
+            for t in (exercice.tests.filter(public=True) if exercice else [])
+        ]
+
         runner = CodeRunner()
-        result = runner.run(code, language, devoir.test_cases)
+        result = runner.run(code, language, test_cases)
 
         if request.user.role == 'etudiant':
             safe_result = {
@@ -170,8 +179,9 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
             score = en_entier(score.strip() if isinstance(score, str) else score)
             if score is None:
                 raise ValidationError({'score': "Le score doit être un entier."})
-            if not 0 <= score <= soumission.devoir.points_max:
-                raise ValidationError({'score': f"Le score doit être compris entre 0 et {soumission.devoir.points_max}."})
+            bareme = soumission.devoir.bareme
+            if not 0 <= score <= bareme:
+                raise ValidationError({'score': f"Le score doit être compris entre 0 et {bareme.normalize():f}."})
             soumission.score = score
         soumission.commentaire = commentaire
         soumission.statut = 'corrige'
@@ -484,8 +494,6 @@ class NoteMatiereViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelV
 
     @action(detail=False, methods=['get'], permission_classes=[IsEtudiant])
     def mes_notes(self, request):
-        from django.db.models import Avg, F, ExpressionWrapper, FloatField
-
         notes = NoteMatiere.objects.filter(etudiant=request.user).select_related('ec', 'classe', 'annee_academique')
         notes = filtrer_archives(notes, 'annee_academique', request.query_params)
         data = []
@@ -496,13 +504,9 @@ class NoteMatiereViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelV
                 devoir__in=devoirs_ec,
                 statut='corrige',
                 score__isnull=False
-            ).annotate(
-                note_20=ExpressionWrapper(
-                    F('score') * 20.0 / F('devoir__points_max'),
-                    output_field=FloatField()
-                )
-            )
-            avg_prog = soumissions.aggregate(avg=Avg('note_20'))['avg']
+            ).select_related('devoir').prefetch_related('devoir__exercices')
+            notes_20 = [float(s.score) * 20.0 / float(s.devoir.bareme) for s in soumissions if s.devoir.bareme]
+            avg_prog = sum(notes_20) / len(notes_20) if notes_20 else None
 
             note_prog = round(avg_prog, 1) if avg_prog else None
             note_manuelle = note.note_devoir

@@ -13,7 +13,7 @@ class DevoirSerializer(serializers.ModelSerializer):
     class Meta:
         model = Devoir
         fields = '__all__'
-        read_only_fields = ['cree_par']
+        read_only_fields = ['cree_par', 'statut_validation', 'motif_refus', 'soumis_le', 'valide_par', 'valide_le']
 
 
 class DevoirSerializerPublic(serializers.ModelSerializer):
@@ -26,7 +26,7 @@ class DevoirSerializerPublic(serializers.ModelSerializer):
 
     class Meta:
         model = Devoir
-        exclude = ['solution', 'test_cases']
+        exclude = ['classes', 'groupes', 'etudiants', 'motif_refus', 'valide_par']
 
 
 class SoumissionDevoirSerializer(serializers.ModelSerializer):
@@ -35,13 +35,13 @@ class SoumissionDevoirSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SoumissionDevoir
-        fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'code_soumis', 'statut', 'score', 'commentaire', 'date_soumission']
+        fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'score', 'commentaire', 'date_soumission']
         read_only_fields = ['id', 'etudiant', 'statut', 'score', 'commentaire', 'date_soumission']
 
 
 class SoumissionDevoirUpdateSerializer(SoumissionDevoirSerializer):
     class Meta(SoumissionDevoirSerializer.Meta):
-        read_only_fields = SoumissionDevoirSerializer.Meta.read_only_fields + ['devoir', 'code_soumis']
+        read_only_fields = SoumissionDevoirSerializer.Meta.read_only_fields + ['devoir']
 
 
 class NoteMatiereSerializer(serializers.ModelSerializer):

@@ -4,7 +4,7 @@ from django.test import TestCase
 
 from accounts.testing import build_world, client_for, make_user
 from audit.models import AuditLog
-from programming.models import Devoir, SoumissionDevoir, NoteMatiere
+from programming.models import Devoir, NoteMatiere, ReponseExercice, SoumissionDevoir
 
 P = '/api/programming'
 
@@ -64,7 +64,7 @@ class SoumissionsTests(TestCase):
 
     def test_correction(self):
         a, b = self.w.a, self.w.b
-        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='print(4)')
+        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         url = f'{P}/soumissions/{soumission.id}/corriger/'
         self.assertEqual(client_for(a.etu).post(url, {'score': 20}, format='json').status_code, 403)
         self.assertEqual(client_for(b.ens).post(url, {'score': 20}, format='json').status_code, 404)
@@ -77,7 +77,7 @@ class SoumissionsTests(TestCase):
 
     def test_etudiant_ne_modifie_pas_sa_soumission(self):
         a = self.w.a
-        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         res = client_for(a.etu).patch(f'{P}/soumissions/{soumission.id}/', {'code_soumis': 'y'}, format='json')
         self.assertEqual(res.status_code, 403)
 
@@ -192,7 +192,7 @@ class ControlesNotesTests(TestCase):
 
     def test_corriger_score_invalide(self):
         a = self.w.a
-        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         url = f'{P}/soumissions/{s.id}/corriger/'
         for score in ('abc', 25, -1, 1.5):
             self.assertEqual(client_for(a.ens).post(url, {'score': score}, format='json').status_code, 400, score)
@@ -246,7 +246,7 @@ class AuditEtValidationNotesTests(TestCase):
 
     def test_suppression_soumission_journalisee(self):
         a = self.w.a
-        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x', score=8)
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, score=8)
         self.assertEqual(client_for(a.ens).delete(f'{P}/soumissions/{s.id}/').status_code, 204)
         log = AuditLog.objects.get(action='modification_note')
         self.assertEqual(log.details['type'], 'soumission')
@@ -257,12 +257,14 @@ class AuditEtValidationNotesTests(TestCase):
     def test_correcteur_ne_modifie_ni_code_ni_devoir(self):
         a = self.w.a
         autre = Devoir.objects.create(titre='Autre', filiere=a.filiere, cree_par=a.ens, est_publie=True)
-        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='original')
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
+        fichiers = [{'nom': 'main.py', 'contenu': 'original'}]
+        ReponseExercice.objects.create(soumission=s, exercice=a.exercice, fichiers=fichiers)
         res = client_for(a.ens).patch(f'{P}/soumissions/{s.id}/',
-                                      {'code_soumis': 'falsifie', 'devoir': autre.id}, format='json')
+                                      {'reponses': [], 'code_soumis': 'falsifie', 'devoir': autre.id}, format='json')
         self.assertIn(res.status_code, (200, 400))
         s.refresh_from_db()
-        self.assertEqual(s.code_soumis, 'original')
+        self.assertEqual([r.fichiers for r in s.reponses.all()], [fichiers])
         self.assertEqual(s.devoir_id, a.devoir.id)
 
     def test_note_directe_hors_bornes(self):
@@ -289,7 +291,7 @@ class EntreesNumeriquesTests(TestCase):
 
     def test_corriger_score_chiffre_non_ascii(self):
         a = self.w.a
-        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         res = client_for(a.ens).post(f'{P}/soumissions/{s.id}/corriger/', {'score': '²'}, format='json')
         self.assertEqual(res.status_code, 400)
 
