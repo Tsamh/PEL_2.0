@@ -276,8 +276,13 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
         soumission = self.get_object()
         self.verifier_ecriture(soumission)
         avant = soumission.score
-        score = request.data.get('score')
-        commentaire = request.data.get('commentaire', '')
+        donnees = request.data
+        if not isinstance(donnees, dict):
+            raise ValidationError("Le corps de la requête doit être un objet JSON.")
+        score = donnees.get('score')
+        commentaire = donnees.get('commentaire', '')
+        if not isinstance(commentaire, str):
+            raise ValidationError({'commentaire': "Le commentaire doit être un texte."})
         if score is not None:
             score = en_entier(score.strip() if isinstance(score, str) else score)
             if score is None:

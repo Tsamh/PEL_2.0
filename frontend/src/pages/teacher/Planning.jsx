@@ -29,11 +29,11 @@ const parOuverture = (a, b) => new Date(a.ouverture) - new Date(b.ouverture) || 
 
 // Fusion des sources : seules les sessions qui ouvrent avant la dernière chargée de chaque source
 // incomplète sont montrées, pour que l'ordre reste exact quand une page suivante arrive.
-function fusion(etat) {
-  const limites = SOURCES.filter((src) => etat[src.type].suivant && etat[src.type].sessions.length > 0)
-    .map((src) => new Date(etat[src.type].sessions[etat[src.type].sessions.length - 1].ouverture).getTime());
+function fusion(sources) {
+  const limites = SOURCES.filter((src) => sources[src.type].suivant && sources[src.type].sessions.length > 0)
+    .map((src) => new Date(sources[src.type].sessions[sources[src.type].sessions.length - 1].ouverture).getTime());
   const limite = limites.length > 0 ? Math.min(...limites) : Infinity;
-  return SOURCES.flatMap((src) => etat[src.type].sessions)
+  return SOURCES.flatMap((src) => sources[src.type].sessions)
     .filter((s) => new Date(s.ouverture).getTime() <= limite)
     .sort(parOuverture);
 }

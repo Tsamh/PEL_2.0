@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { chargerTout } from '../../services/pagination';
@@ -18,6 +18,25 @@ const stylePre = { background: 'var(--gray-900, #1a1a1a)', color: '#e2e8f0', pad
 const fichiersDeDepart = (exercice, langage) => {
   const fichiers = (exercice.fichiers_initiaux || []).map((f) => ({ nom: f.nom, contenu: f.contenu }));
   return fichiers.length > 0 ? fichiers : [{ nom: nomFichier(langage), contenu: '' }];
+};
+
+// Avance de la soumission automatique sur l'heure de fermeture effective.
+const AVANCE_AUTO_MS = 30000;
+
+// Brouillon du code d'un exercice, gardé le temps de l'onglet (le stockage peut être indisponible).
+const cleBrouillon = (devoirId, exerciceId) => `pel-brouillon-devoir-${devoirId}-${exerciceId}`;
+const lireBrouillon = (devoirId, exerciceId) => {
+  try {
+    const brut = window.sessionStorage.getItem(cleBrouillon(devoirId, exerciceId));
+    const fichiers = brut ? JSON.parse(brut) : null;
+    return Array.isArray(fichiers) && fichiers.length > 0 ? fichiers : null;
+  } catch { return null; }
+};
+const ecrireBrouillon = (devoirId, exerciceId, fichiers) => {
+  try { window.sessionStorage.setItem(cleBrouillon(devoirId, exerciceId), JSON.stringify(fichiers)); } catch { /* stockage indisponible */ }
+};
+const effacerBrouillons = (devoirId, exercices) => {
+  try { exercices.forEach((ex) => window.sessionStorage.removeItem(cleBrouillon(devoirId, ex.id))); } catch { /* stockage indisponible */ }
 };
 
 function ResultatExecution({ resultat, testsPublics }) {
@@ -90,6 +109,8 @@ function DevoirEtudiant({ id }) {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const autoLance = useRef(false);
+  const envoiRef = useRef(null);
 
   const charger = useCallback(async () => {
     try {
@@ -100,7 +121,12 @@ function DevoirEtudiant({ id }) {
       setDevoir(res.data);
       setSoumission(subs.find((s) => s.devoir === res.data.id) || null);
       // Les fichiers en cours d'édition sont gardés ; seuls les exercices nouveaux partent du fichier de départ.
-      setFichiers((avant) => Object.fromEntries(res.data.exercices.map((ex) => [ex.id, avant[ex.id] || fichiersDeDepart(ex, res.data.langage)])));
+      // Un brouillon de l'onglet remplace le fichier de départ tant que le devoir n'est pas soumis.
+      const dejaSoumis = Boolean(res.data.etat?.soumis || subs.some((s) => s.devoir === res.data.id));
+      setFichiers((avant) => Object.fromEntries(res.data.exercices.map((ex) => [
+        ex.id,
+        avant[ex.id] || (!dejaSoumis && lireBrouillon(res.data.id, ex.id)) || fichiersDeDepart(ex, res.data.langage),
+      ])));
       setError('');
     } catch (err) {
       setError(messageErreur(err, 'Devoir introuvable.'));
@@ -110,6 +136,49 @@ function DevoirEtudiant({ id }) {
   }, [id]);
 
   useEffect(() => { charger(); }, [charger]);
+
+  // Envoi du devoir ; en mode automatique, ni confirmation ni blocage par le chargement.
+  const envoyer = async (auto) => {
+    if (!devoir) return;
+    if (!auto && !window.confirm('Soumettre le devoir ? Le code de tous les exercices sera rendu et ne pourra plus être modifié.')) return;
+    setSubmitting(true);
+    setError('');
+    setMessage('');
+    try {
+      const res = await api.post('/programming/soumissions/', {
+        devoir: devoir.id,
+        reponses: devoir.exercices.map((ex) => ({ exercice: ex.id, fichiers: fichiers[ex.id] })),
+      });
+      setSoumission(res.data);
+      effacerBrouillons(devoir.id, devoir.exercices);
+      setMessage(auto ? 'Le délai se termine : votre devoir a été soumis automatiquement.' : 'Votre devoir a été soumis.');
+      charger();
+    } catch (err) {
+      setError(messageErreur(err, 'Erreur lors de la soumission.'));
+      // Une 409 (déjà soumis, fermé) change l'état affiché : il est relu.
+      if (err.response?.status === 409) charger();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  useEffect(() => { envoiRef.current = envoyer; });
+
+  // Soumission automatique peu avant la fermeture effective, une seule fois.
+  const fermeture = devoir?.etat?.fenetre?.fermeture;
+  const peutSoumettreAuto = Boolean(devoir?.etat?.ouvert) && !devoir?.etat?.soumis && !soumission;
+  useEffect(() => {
+    if (!peutSoumettreAuto || !fermeture || autoLance.current) return undefined;
+    const declencher = () => {
+      if (autoLance.current) return;
+      autoLance.current = true;
+      envoiRef.current(true);
+    };
+    const delai = new Date(fermeture).getTime() - AVANCE_AUTO_MS - Date.now();
+    if (delai <= 0) { declencher(); return undefined; }
+    const minuteur = setTimeout(declencher, Math.min(delai, 2147483647));
+    return () => clearTimeout(minuteur);
+  }, [peutSoumettreAuto, fermeture]);
 
   if (loading) return <div className="loading">Chargement...</div>;
   if (!devoir) return <div className="alert alert-error">{error}</div>;
@@ -129,33 +198,12 @@ function DevoirEtudiant({ id }) {
     }
   };
 
-  const soumettre = async () => {
-    if (!window.confirm('Soumettre le devoir ? Le code de tous les exercices sera rendu et ne pourra plus être modifié.')) return;
-    setSubmitting(true);
-    setError('');
-    setMessage('');
-    try {
-      const res = await api.post('/programming/soumissions/', {
-        devoir: devoir.id,
-        reponses: devoir.exercices.map((ex) => ({ exercice: ex.id, fichiers: fichiers[ex.id] })),
-      });
-      setSoumission(res.data);
-      setMessage('Votre devoir a été soumis.');
-      charger();
-    } catch (err) {
-      setError(messageErreur(err, 'Erreur lors de la soumission.'));
-      // Une 409 (déjà soumis, fermé) change l'état affiché : il est relu.
-      if (err.response?.status === 409) charger();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   let messageFenetre = '';
   if (!soumis && !etat.ouvert) {
-    messageFenetre = etat.fenetre?.prochaine_ouverture
-      ? `Ce devoir n'est pas ouvert. Ouverture le ${formatDate(etat.fenetre.prochaine_ouverture)}.`
-      : 'Ce devoir est fermé.';
+    const echu = etat.fenetre?.fermeture && new Date(etat.fenetre.fermeture) <= new Date();
+    if (etat.fenetre?.prochaine_ouverture) messageFenetre = `Ce devoir n'est pas ouvert. Ouverture le ${formatDate(etat.fenetre.prochaine_ouverture)}.`;
+    else if (echu) messageFenetre = "Le délai est écoulé : votre code n'a pas été rendu.";
+    else messageFenetre = 'Ce devoir est fermé.';
   }
   const aUneNote = soumission && soumission.score !== null && soumission.score !== undefined;
 
@@ -228,7 +276,11 @@ function DevoirEtudiant({ id }) {
                 <>
                   <strong>{soumis ? 'Code rendu' : 'Votre code'} ({affiches[0]?.nom})</strong>
                   <CodeEditor language={devoir.langage} value={contenuPrincipal(affiches)} readOnly={!editable} height="300px"
-                    onChange={editable ? (contenu) => setFichiers((f) => ({ ...f, [ex.id]: avecContenuPrincipal(f[ex.id], contenu, devoir.langage) })) : undefined} />
+                    onChange={editable ? (contenu) => {
+                      const maj = avecContenuPrincipal(fichiers[ex.id], contenu, devoir.langage);
+                      ecrireBrouillon(devoir.id, ex.id, maj);
+                      setFichiers((f) => ({ ...f, [ex.id]: maj }));
+                    } : undefined} />
                   {affiches.length > 1 && <small style={styleNote}>Autres fichiers {soumis ? 'rendus' : 'conservés'} : {affiches.slice(1).map((f) => f.nom).join(', ')}.</small>}
                 </>
               )}
@@ -252,7 +304,7 @@ function DevoirEtudiant({ id }) {
 
       {editable && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '24px' }}>
-          <button className="btn btn-primary" onClick={soumettre} disabled={submitting || devoir.exercices.length === 0}>
+          <button className="btn btn-primary" onClick={() => envoyer(false)} disabled={submitting || devoir.exercices.length === 0}>
             {submitting ? 'Soumission...' : 'Soumettre le devoir'}
           </button>
         </div>

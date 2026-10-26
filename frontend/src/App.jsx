@@ -91,7 +91,7 @@ function App() {
             <Route path="quiz/:id/statistiques" element={<RoleRoute roles={[...GESTION, 'enseignant']}><TableauBordQuiz /></RoleRoute>} />
             <Route path="etudiants/:id/resultats" element={<RoleRoute roles={[...GESTION, 'enseignant']}><FicheEtudiant /></RoleRoute>} />
             <Route path="devoirs" element={<RoleRoute roles={GESTION}><DevoirManagement /></RoleRoute>} />
-            <Route path="devoirs/:id" element={<DevoirDetail />} />
+            <Route path="devoirs/:id" element={<RoleRoute roles={[...GESTION, 'enseignant', 'etudiant']}><DevoirDetail /></RoleRoute>} />
             <Route path="devoirs/:id/corrections" element={<RoleRoute roles={[...GESTION, 'enseignant']}><Corrections /></RoleRoute>} />
             <Route path="mes-cours" element={<RoleRoute roles={['enseignant']}><MesCours /></RoleRoute>} />
             <Route path="mes-quiz" element={<RoleRoute roles={['enseignant']}><MesQuiz /></RoleRoute>} />

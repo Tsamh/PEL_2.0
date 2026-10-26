@@ -205,6 +205,16 @@ class ControlesNotesTests(TestCase):
         s.refresh_from_db()
         self.assertIsNone(s.score)
 
+    def test_corriger_corps_non_objet(self):
+        a = self.w.a
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
+        url = f'{P}/soumissions/{s.id}/corriger/'
+        for corps in ([], [1, 2], 'texte'):
+            self.assertEqual(client_for(a.ens).post(url, corps, format='json').status_code, 400, corps)
+        self.assertEqual(client_for(a.ens).post(url, {'score': 3, 'commentaire': ['x']}, format='json').status_code, 400)
+        s.refresh_from_db()
+        self.assertIsNone(s.score)
+
     def bulk(self, a, notes, **extra):
         data = {'ec': a.ec.id, 'classe': a.classe.id, 'annee_academique': a.annee.id, 'notes': notes}
         data.update(extra)
