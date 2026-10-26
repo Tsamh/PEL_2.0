@@ -12,6 +12,7 @@ import QuestionEditeur from './QuestionEditeur';
 import SelecteurBanque from './SelecteurBanque';
 import { depuisApi, nouvelleQuestion, versContenu } from './questions';
 import StatutValidation from './StatutValidation';
+import { versChampLocal, badgeStatut } from '../evaluations/communs';
 import { useAuth } from '../../context/AuthContext';
 
 const formulaireVide = {
@@ -20,26 +21,6 @@ const formulaireVide = {
   tentatives_autorisees: 1, reprise_autorisee: true, publication_resultats: 'immediate', afficher_corrige: false,
   classes: [], groupes: [], etudiants: [],
 };
-
-// Date ISO du serveur vers le format d'un champ <input type="datetime-local">.
-function versChampLocal(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-const STATUTS_VALIDATION = { en_attente: ['badge-pending', 'En attente de validation'], refusee: ['badge-inactive', 'Refusé'] };
-
-function badgeStatut(item) {
-  if (item.est_publie) return <span className="badge badge-active">Publié</span>;
-  if (item.validation_requise && STATUTS_VALIDATION[item.statut_validation]) {
-    const [classe, libelle] = STATUTS_VALIDATION[item.statut_validation];
-    return <span className={`badge ${classe}`}>{libelle}</span>;
-  }
-  if (item.validation_requise && item.statut_validation === 'validee') return <span className="badge badge-inactive">Validé, non publié</span>;
-  return <span className="badge badge-inactive">Brouillon</span>;
-}
 
 export default function QuizEditorPage({ titre, texteVide, sousTexteVide }) {
   const [items, setItems] = useState([]);

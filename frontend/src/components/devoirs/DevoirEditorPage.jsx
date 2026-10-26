@@ -9,6 +9,7 @@ import StatutValidation from '../quiz/StatutValidation';
 import CaseArchives from '../CaseArchives';
 import ExerciceEditeur from './ExerciceEditeur';
 import { DIFFICULTES, LANGAGES, depuisApi, nouvelExercice, renommerFichiers, versPayload } from './exercices';
+import { versChampLocal, badgeStatut } from '../evaluations/communs';
 import { useAuth } from '../../context/AuthContext';
 
 const MESSAGE_VERROU = 'Ce devoir a déjà des soumissions : ses exercices et ses tests ne peuvent plus être modifiés.';
@@ -23,14 +24,6 @@ const formulaireVide = {
 const separateur = <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid var(--gray-200)' }} />;
 const styleNote = { fontSize: '0.85rem', color: 'var(--gray-500)' };
 
-// Date ISO du serveur vers le format d'un champ <input type="datetime-local">.
-function versChampLocal(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 const formatDate = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '');
 
 function periodeAffichee(item) {
@@ -38,18 +31,6 @@ function periodeAffichee(item) {
   if (item.date_fin) return `Jusqu'au ${formatDate(item.date_fin)}`;
   if (item.date_debut) return `À partir du ${formatDate(item.date_debut)}`;
   return '-';
-}
-
-const STATUTS_VALIDATION = { en_attente: ['badge-pending', 'En attente de validation'], refusee: ['badge-inactive', 'Refusé'] };
-
-function badgeStatut(item) {
-  if (item.est_publie) return <span className="badge badge-active">Publié</span>;
-  if (item.validation_requise && STATUTS_VALIDATION[item.statut_validation]) {
-    const [classe, libelle] = STATUTS_VALIDATION[item.statut_validation];
-    return <span className={`badge ${classe}`}>{libelle}</span>;
-  }
-  if (item.validation_requise && item.statut_validation === 'validee') return <span className="badge badge-inactive">Validé, non publié</span>;
-  return <span className="badge badge-inactive">Brouillon</span>;
 }
 
 export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
@@ -98,6 +79,7 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
     try {
       const res = await api.get('/programming/devoirs/', { params: archives ? { archives: '1' } : {} });
       setItems(res.data.results || res.data);
+      setError('');
     } catch (err) {
       setError(messageErreur(err, 'Erreur lors du chargement des devoirs.'));
     } finally {
@@ -232,7 +214,7 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
                 <div className="form-row">
                   <div className="form-group">
                     <label>Langage</label>
-                    <select value={form.langage} onChange={(e) => changerLangage(e.target.value)}>
+                    <select value={form.langage} disabled={verrouille} onChange={(e) => changerLangage(e.target.value)}>
                       {Object.entries(LANGAGES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
                   </div>
@@ -345,7 +327,7 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
                 ) : exercices.length === 0 ? (
                   <p style={styleNote}>Aucun exercice. Un devoir publié doit contenir au moins un exercice.</p>
                 ) : exercices.map((ex, i) => (
-                  <ExerciceEditeur key={i} exercice={ex} index={i} langage={form.langage} competences={competences}
+                  <ExerciceEditeur key={ex.cle} exercice={ex} index={i} langage={form.langage} competences={competences}
                     onChange={(patch) => majExercice(i, patch)}
                     onMonter={i > 0 ? () => deplacerExercice(i, -1) : null}
                     onDescendre={i < exercices.length - 1 ? () => deplacerExercice(i, 1) : null}

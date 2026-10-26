@@ -104,6 +104,21 @@ class DevoirsApiTests(TestCase):
         self.assertEqual(res.data['bareme'], '10.00')
         self.assertEqual(Devoir.objects.get(pk=res.data['id']).bareme, Decimal('10.00'))
 
+    def test_langage_fige_apres_une_soumission(self):
+        devoir = self.a.devoir
+        SoumissionDevoir.objects.create(devoir=devoir, etudiant=self.a.etu)
+        langage = devoir.langage
+        autre = 'java' if langage != 'java' else 'python'
+        res = self.patch(devoir, {'langage': autre})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.data['detail'], MESSAGE_VERROU)
+        devoir.refresh_from_db()
+        self.assertEqual(devoir.langage, langage)
+
+        # Renvoyer le même langage n'est pas un changement.
+        res = self.patch(devoir, {'langage': langage, 'titre': 'Renommé'})
+        self.assertEqual(res.status_code, 200, res.data)
+
     def test_verrou_apres_une_soumission(self):
         devoir = self.a.devoir
         SoumissionDevoir.objects.create(devoir=devoir, etudiant=self.a.etu)

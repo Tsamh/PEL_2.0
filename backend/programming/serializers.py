@@ -264,7 +264,8 @@ class DevoirSerializer(serializers.ModelSerializer):
             Devoir.objects.select_for_update().get(pk=instance.pk)
             # Des exercices renvoyés à l'identique ne sont pas réécrits : les réponses qui les citent restent valables.
             remplacer = exercices_data is not None and exercices_modifies(instance, exercices_data)
-            if remplacer and instance.soumissions.exists():
+            langage_change = 'langage' in validated_data and validated_data['langage'] != instance.langage
+            if (remplacer or langage_change) and instance.soumissions.exists():
                 raise Conflit(MESSAGE_VERROU)
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)

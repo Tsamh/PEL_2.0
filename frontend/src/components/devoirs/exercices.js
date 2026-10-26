@@ -12,7 +12,12 @@ export const nomFichier = (langage) => `main.${EXTENSIONS[langage] || 'txt'}`;
 export const nouveauTest = () => ({ entree: '', sortie_attendue: '', public: false, poids: 1 });
 export const nouvelExemple = () => ({ entree: '', sortie: '', explication: '' });
 
+let compteurCle = 0;
+// Clé locale stable (jamais envoyée à l'API) pour que l'éditeur suive l'exercice lors des déplacements.
+const nouvelleCle = () => { compteurCle += 1; return `ex-${compteurCle}`; };
+
 export const nouvelExercice = (langage) => ({
+  cle: nouvelleCle(),
   titre: '', enonce: '', contraintes: '', exemples: [],
   fichiers_initiaux: [{ nom: nomFichier(langage), contenu: '' }],
   solution: [{ nom: nomFichier(langage), contenu: '' }],
@@ -23,6 +28,7 @@ const copieFichiers = (fichiers) => (fichiers || []).map((f) => ({ nom: f.nom, c
 
 // Exercice lu dans l'API vers l'état du formulaire (le texte est gardé tel quel).
 export const depuisApi = (e) => ({
+  cle: nouvelleCle(),
   titre: e.titre, enonce: e.enonce || '', contraintes: e.contraintes || '',
   exemples: (e.exemples || []).map((x) => ({ entree: x.entree || '', sortie: x.sortie || '', explication: x.explication || '' })),
   fichiers_initiaux: copieFichiers(e.fichiers_initiaux),
