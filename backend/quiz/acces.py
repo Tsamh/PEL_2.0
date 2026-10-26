@@ -1,4 +1,5 @@
-"""Accès des étudiants aux quiz : affectation (classes, groupes, étudiants) et code d'accès."""
+"""Accès des étudiants aux évaluations : affectation (classes, groupes, étudiants), commune aux quiz
+et aux devoirs, et code d'accès des quiz."""
 import hmac
 import secrets
 
@@ -14,13 +15,23 @@ from referentiel.models import Inscription
 from .models import Quiz
 
 
-def q_quiz_affecte(user):
-    """Q vrai pour les quiz affectés à l'étudiant : par une de ses classes, un de ses groupes ou nominativement."""
+def q_affecte(modele, user):
+    """Q vrai pour les évaluations de `modele` affectées à l'étudiant : par une de ses classes,
+    un de ses groupes (s'il est inscrit dans la classe du groupe) ou nominativement.
+
+    `modele` doit porter les champs `classes`, `groupes` et `etudiants` (quiz, devoir).
+    """
+    objets = modele.objects
     return (
-        Q(pk__in=Quiz.objects.filter(classes__inscriptions__etudiant=user).values('pk'))
-        | Q(pk__in=Quiz.objects.filter(groupes__membres=user, groupes__classe__inscriptions__etudiant=user).values('pk'))
-        | Q(pk__in=Quiz.objects.filter(etudiants=user).values('pk'))
+        Q(pk__in=objets.filter(classes__inscriptions__etudiant=user).values('pk'))
+        | Q(pk__in=objets.filter(groupes__membres=user, groupes__classe__inscriptions__etudiant=user).values('pk'))
+        | Q(pk__in=objets.filter(etudiants=user).values('pk'))
     )
+
+
+def q_quiz_affecte(user):
+    """Q vrai pour les quiz affectés à l'étudiant (voir `q_affecte`)."""
+    return q_affecte(Quiz, user)
 
 
 CLES_CIBLES = ('classes', 'groupes', 'etudiants')
@@ -30,9 +41,9 @@ def cibles_vides():
     return {cle: set() for cle in CLES_CIBLES}
 
 
-def cibles(quiz):
-    """Identifiants des cibles actuelles du quiz, par type."""
-    return {cle: set(getattr(quiz, cle).values_list('pk', flat=True)) for cle in CLES_CIBLES}
+def cibles(evaluation):
+    """Identifiants des cibles actuelles de l'évaluation (quiz ou devoir), par type."""
+    return {cle: set(getattr(evaluation, cle).values_list('pk', flat=True)) for cle in CLES_CIBLES}
 
 
 def ecart_cibles(avant, apres):
@@ -44,14 +55,14 @@ def ecart_cibles(avant, apres):
     return {'ajouts': ajouts, 'retraits': retraits}
 
 
-def verifier_cibles(acteur, quiz, attrs):
+def verifier_cibles(acteur, evaluation, attrs):
     """Refuse (400) toute cible ajoutée hors du périmètre de l'acteur.
 
     Les messages ne citent que l'identifiant : aucun nom, code ni rôle d'un autre établissement.
     Les cibles déjà affectées ne sont pas recontrôlées : une affectation reste valide
     si l'enseignant perd ensuite la classe.
     """
-    actuelles = cibles(quiz) if quiz is not None else cibles_vides()
+    actuelles = cibles(evaluation) if evaluation is not None else cibles_vides()
     nouvelles = {cle: [o for o in attrs.get(cle, []) if o.pk not in actuelles[cle]] for cle in CLES_CIBLES}
     erreurs = {}
     if acteur.role == SUPERADMIN:

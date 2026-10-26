@@ -1,14 +1,16 @@
-"""Fenêtre effective d'un quiz pour un étudiant : sessions, rattrapages et tentatives supplémentaires.
+"""Fenêtre effective d'une évaluation (quiz ou devoir) pour un étudiant : sessions, rattrapages
+et tentatives supplémentaires.
 
-Sans session applicable, la fenêtre générale du quiz s'applique (comportement d'origine).
+L'évaluation porte `date_debut`, `date_fin` et ses sessions sous `evaluation.sessions` ; le modèle
+des sessions porte `type` (constantes `NORMALE`, `RATTRAPAGE`), `ouverture`, `fermeture`, `classes`,
+`groupes` et `etudiants`. Sans session applicable, la fenêtre générale de l'évaluation s'applique.
+Une évaluation sans `tentatives_autorisees` (devoir) compte une tentative.
 """
 from dataclasses import dataclass
 from datetime import datetime
 
 from django.db.models import Q
 from django.utils import timezone
-
-from .models import SessionQuiz
 
 
 @dataclass
@@ -50,29 +52,30 @@ class Fenetre:
         return max(fermes, key=lambda i: i[1]) if fermes else (None, None)
 
 
-def _sessions_applicables(quiz, etudiant):
-    par_classe = SessionQuiz.objects.filter(classes__inscriptions__etudiant=etudiant).values('pk')
-    par_groupe = SessionQuiz.objects.filter(
+def _sessions_applicables(evaluation, etudiant):
+    Session = evaluation.sessions.model
+    par_classe = Session.objects.filter(classes__inscriptions__etudiant=etudiant).values('pk')
+    par_groupe = Session.objects.filter(
         groupes__membres=etudiant, groupes__classe__inscriptions__etudiant=etudiant,
     ).values('pk')
-    normales = SessionQuiz.objects.filter(quiz=quiz, type=SessionQuiz.NORMALE).filter(
+    normales = evaluation.sessions.filter(type=Session.NORMALE).filter(
         Q(pk__in=par_classe) | Q(pk__in=par_groupe)
     )
-    rattrapages = SessionQuiz.objects.filter(quiz=quiz, type=SessionQuiz.RATTRAPAGE, etudiants=etudiant)
+    rattrapages = evaluation.sessions.filter(type=Session.RATTRAPAGE, etudiants=etudiant)
     return list(normales), list(rattrapages)
 
 
-def construire(quiz, normales, rattrapages, maintenant):
+def construire(evaluation, normales, rattrapages, maintenant):
     """Fenêtre à partir des sessions déjà connues (calcul pur, sans requête)."""
-    intervalles = [(s.ouverture, s.fermeture) for s in normales] or [(quiz.date_debut, quiz.date_fin)]
+    intervalles = [(s.ouverture, s.fermeture) for s in normales] or [(evaluation.date_debut, evaluation.date_fin)]
     intervalles += [(s.ouverture, s.fermeture) for s in rattrapages]
     # Les tentatives supplémentaires ne servent que pendant que leur rattrapage est ouvert.
-    bonus = sum(s.tentatives_supplementaires for s in rattrapages if s.ouverture <= maintenant < s.fermeture)
+    bonus = sum(getattr(s, 'tentatives_supplementaires', 0) for s in rattrapages if s.ouverture <= maintenant < s.fermeture)
     a_venir = any(s.ouverture > maintenant for s in rattrapages)
-    return Fenetre(intervalles=intervalles, tentatives_max=quiz.tentatives_autorisees + bonus,
+    return Fenetre(intervalles=intervalles, tentatives_max=getattr(evaluation, 'tentatives_autorisees', 1) + bonus,
                    maintenant=maintenant, rattrapage_a_venir=a_venir)
 
 
-def fenetre(quiz, etudiant, maintenant=None):
-    normales, rattrapages = _sessions_applicables(quiz, etudiant)
-    return construire(quiz, normales, rattrapages, maintenant or timezone.now())
+def fenetre(evaluation, etudiant, maintenant=None):
+    normales, rattrapages = _sessions_applicables(evaluation, etudiant)
+    return construire(evaluation, normales, rattrapages, maintenant or timezone.now())
