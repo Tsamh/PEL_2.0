@@ -3,6 +3,7 @@ from urllib.parse import urlsplit
 from django.db import transaction
 from rest_framework import serializers
 
+from accounts.scoping import en_entier
 from quiz import fenetres, validation
 from quiz.acces import CLES_CIBLES, verifier_cibles
 from quiz.exceptions import Conflit
@@ -331,14 +332,48 @@ class DevoirEtudiantSerializer(serializers.ModelSerializer):
         return devoir.ec.libelle if devoir.ec_id else None
 
 
+MESSAGE_REPONSES = "Les réponses sont une liste non vide d'objets {exercice, fichiers}."
+
+
+def valider_reponses(devoir, valeur):
+    """Réponses d'une soumission : exercices du devoir seulement, chacun au plus une fois, fichiers valides.
+
+    Renvoie la liste `[(exercice, fichiers)]` dans l'ordre reçu ; ValidationError (400) sous `reponses` sinon.
+    """
+    if not isinstance(valeur, list) or not valeur or not all(isinstance(r, dict) for r in valeur):
+        raise serializers.ValidationError({'reponses': [MESSAGE_REPONSES]})
+    exercices = {e.pk: e for e in devoir.exercices.all()}
+    reponses, vus = [], set()
+    for i, reponse in enumerate(valeur, start=1):
+        exercice_id = en_entier(reponse.get('exercice'))
+        if exercice_id not in exercices:
+            raise serializers.ValidationError({'reponses': [f"Réponse {i} : exercice introuvable dans ce devoir."]})
+        if exercice_id in vus:
+            raise serializers.ValidationError({'reponses': [f"Réponse {i} : cet exercice a déjà une réponse."]})
+        vus.add(exercice_id)
+        try:
+            fichiers = valider_fichiers(reponse.get('fichiers', []))
+        except serializers.ValidationError as erreur:
+            raise serializers.ValidationError({'reponses': [f"Réponse {i} : {m}" for m in erreur.detail]})
+        reponses.append((exercices[exercice_id], fichiers))
+    return reponses
+
+
 class SoumissionDevoirSerializer(serializers.ModelSerializer):
     etudiant_nom = serializers.CharField(source='etudiant.get_full_name', read_only=True)
     devoir_titre = serializers.CharField(source='devoir.titre', read_only=True)
+    bareme = serializers.DecimalField(source='devoir.bareme', max_digits=8, decimal_places=2, read_only=True)
+    reponses = serializers.SerializerMethodField()
 
     class Meta:
         model = SoumissionDevoir
-        fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'score', 'commentaire', 'date_soumission']
+        fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'score', 'commentaire',
+                  'date_soumission', 'bareme', 'reponses']
         read_only_fields = ['id', 'etudiant', 'statut', 'score', 'commentaire', 'date_soumission']
+
+    def get_reponses(self, soumission):
+        return [{'exercice': r.exercice_id, 'exercice_titre': r.exercice.titre, 'fichiers': r.fichiers}
+                for r in soumission.reponses.all()]
 
 
 class SoumissionDevoirUpdateSerializer(SoumissionDevoirSerializer):

@@ -58,8 +58,10 @@ class SoumissionsTests(TestCase):
     def test_etudiant_soumet_sur_un_devoir_visible(self):
         a, b = self.w.a, self.w.b
         client = client_for(a.etu)
-        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': a.devoir.id, 'code_soumis': 'print(4)'}, format='json').status_code, 201)
-        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': b.devoir.id, 'code_soumis': 'x'}, format='json').status_code, 400)
+        reponses = [{'exercice': a.exercice.id, 'fichiers': [{'nom': 'main.py', 'contenu': 'print(4)'}]}]
+        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': a.devoir.id, 'reponses': reponses}, format='json').status_code, 201)
+        reponses = [{'exercice': b.exercice.id, 'fichiers': []}]
+        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': b.devoir.id, 'reponses': reponses}, format='json').status_code, 400)
 
     def test_seul_l_etudiant_soumet(self):
         a = self.w.a

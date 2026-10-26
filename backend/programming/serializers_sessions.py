@@ -35,6 +35,12 @@ class SessionDevoirSerializer(SessionBaseSerializer):
         return devoirs_du_perimetre(user)
 
     def concernes_rattrapage(self, devoir):
-        """Étudiants affectés au devoir ou ayant déjà une soumission."""
+        """Étudiants affectés au devoir qui ne l'ont pas soumis (une seule soumission par devoir).
+
+        Les étudiants déjà visés par le rattrapage modifié restent acceptés, même s'ils ont soumis depuis.
+        """
         concernes = set(etudiants_affectes(devoir).values_list('pk', flat=True))
-        return concernes | set(devoir.soumissions.values_list('etudiant_id', flat=True))
+        concernes -= set(devoir.soumissions.values_list('etudiant_id', flat=True))
+        if self.instance is not None:
+            concernes |= set(self.instance.etudiants.values_list('pk', flat=True))
+        return concernes

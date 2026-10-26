@@ -1,3 +1,4 @@
+import math
 import subprocess
 import tempfile
 import os
@@ -6,11 +7,10 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
-from django.db import transaction
-from django.utils import timezone
+from django.db import IntegrityError, transaction
 
 from accounts.permissions import (
-    IsEtudiant, RolePermission, CREATEURS, TOUS_LES_ROLES, ENSEIGNANT, ETUDIANT,
+    IsEtudiant, RolePermission, CREATEURS, GESTION, TOUS_LES_ROLES, ENSEIGNANT, ETUDIANT,
 )
 from accounts.scoping import (
     EtablissementScopedMixin, classes_du_perimetre, classes_enseignant,
@@ -18,22 +18,34 @@ from accounts.scoping import (
     MESSAGE_HORS_PERIMETRE,
 )
 from audit.services import log as audit_log
-from quiz import acces
+from quiz import acces, fenetres, validation
+from quiz.exceptions import Conflit
 from quiz.statistiques import etudiants_affectes
 from quiz.views import etablissement_evaluation
 from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_archivee
-from .models import Devoir, SoumissionDevoir, NoteMatiere
+from .models import Devoir, ReponseExercice, SoumissionDevoir, NoteMatiere
 from .serializers import (
     DevoirSerializer, DevoirEtudiantSerializer, SoumissionDevoirSerializer, SoumissionDevoirUpdateSerializer,
-    NoteMatiereSerializer,
+    NoteMatiereSerializer, valider_reponses,
 )
+from .validation import PROFIL_DEVOIR
 
 CORRECTEURS = RolePermission(read=CREATEURS, write=CREATEURS)
+MESSAGE_DEJA_SOUMIS = "Vous avez déjà soumis ce devoir."
+MESSAGE_PAS_OUVERT = "Ce devoir n'est pas ouvert."
+MESSAGE_FERME = "Ce devoir est fermé."
 
 
 def devoirs_visibles_etudiant(user):
     """Devoirs publiés affectés à l'étudiant (classe, groupe de sa classe ou nominativement)."""
     return Devoir.objects.filter(est_publie=True).filter(acces.q_affecte(Devoir, user))
+
+
+def verifier_fenetre_ouverte(devoir, etudiant):
+    """409 si la fenêtre effective de l'étudiant (sessions, rattrapages) n'est pas ouverte."""
+    fenetre = fenetres.fenetre(devoir, etudiant)
+    if fenetre.ouverte is None:
+        raise Conflit(MESSAGE_PAS_OUVERT if fenetre.prochaine_ouverture is not None else MESSAGE_FERME)
 
 
 class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
@@ -59,6 +71,35 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
 
     def etudiant_scope(self, qs, user):
         return qs.filter(pk__in=devoirs_visibles_etudiant(user))
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        statut = self.request.query_params.get('statut_validation')
+        if statut in dict(Devoir.STATUT_VALIDATION_CHOICES):
+            qs = qs.filter(statut_validation=statut)
+        return qs
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=CREATEURS)])
+    def soumettre_validation(self, request, pk=None):
+        devoir = self.get_object()
+        self.verifier_ecriture(devoir)
+        validation.soumettre(devoir, request, PROFIL_DEVOIR)
+        return Response(self.get_serializer(devoir).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=GESTION)])
+    def valider(self, request, pk=None):
+        devoir = self.get_object()
+        self.verifier_ecriture(devoir)
+        validation.valider(devoir, request, PROFIL_DEVOIR)
+        return Response(self.get_serializer(devoir).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=GESTION)])
+    def refuser(self, request, pk=None):
+        devoir = self.get_object()
+        self.verifier_ecriture(devoir)
+        motif = request.data.get('motif') if isinstance(request.data, dict) else None
+        validation.refuser(devoir, request, motif, PROFIL_DEVOIR)
+        return Response(self.get_serializer(devoir).data)
 
     def perform_create(self, serializer, **kwargs):
         verifier_filiere_du_perimetre(self.request.user, serializer.validated_data.get('filiere'))
@@ -108,24 +149,28 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def execute(self, request, pk=None):
+        """Exécution provisoire (jusqu'à 4b) du code sur les seuls tests publics d'un exercice du devoir."""
         devoir = self.get_object()
-        code = request.data.get('code', '')
-        language = devoir.langage
-
-        if not code.strip():
+        if request.user.role == ETUDIANT:
+            # Rien n'est écrit, mais l'étudiant n'exécute que pendant sa fenêtre, hors année archivée.
+            self.verifier_ecriture(devoir)
+            verifier_fenetre_ouverte(devoir, request.user)
+        donnees = request.data if isinstance(request.data, dict) else {}
+        exercice_id = en_entier(donnees.get('exercice'))
+        exercice = devoir.exercices.filter(pk=exercice_id).first() if exercice_id is not None else None
+        if exercice is None:
+            raise ValidationError({'exercice': ["Exercice introuvable dans ce devoir."]})
+        code = donnees.get('code', '')
+        if not isinstance(code, str) or not code.strip():
             return Response({"error": "Le code ne peut pas être vide"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Tests publics de l'exercice demandé, sinon du premier exercice.
-        exercices = devoir.exercices.all()
-        exercice_id = en_entier(request.data.get('exercice'))
-        exercice = exercices.filter(pk=exercice_id).first() if exercice_id is not None else exercices.first()
         test_cases = [
             {'input': t.entree, 'expected_output': t.sortie_attendue}
-            for t in (exercice.tests.filter(public=True) if exercice else [])
+            for t in exercice.tests.filter(public=True)
         ]
 
         runner = CodeRunner()
-        result = runner.run(code, language, test_cases)
+        result = runner.run(code, devoir.langage, test_cases)
 
         if request.user.role == 'etudiant':
             safe_result = {
@@ -151,7 +196,10 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
 class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
     annee_path = 'devoir__annee_academique'
     parent_params = ('devoir',)
-    queryset = SoumissionDevoir.objects.select_related('devoir', 'etudiant').all()
+    queryset = (
+        SoumissionDevoir.objects.select_related('devoir', 'etudiant')
+        .prefetch_related('devoir__exercices', 'reponses__exercice')
+    )
     serializer_class = SoumissionDevoirSerializer
 
     def get_permissions(self):
@@ -189,14 +237,39 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
         )
         instance.delete()
 
-    def perform_create(self, serializer, **kwargs):
-        devoir = serializer.validated_data['devoir']
-        if not devoirs_visibles_etudiant(self.request.user).filter(pk=devoir.pk).exists():
+    def create(self, request, *args, **kwargs):
+        """Soumission finale : `{devoir, reponses: [{exercice, fichiers: [{nom, contenu}]}]}`, une seule par devoir.
+
+        Ordre des contrôles : devoir visible (400), année archivée (409), fenêtre (409), soumission existante
+        (409), réponses (400) ; la soumission et ses réponses sont créées ensemble, devoir verrouillé.
+        """
+        etudiant = request.user
+        donnees = request.data if isinstance(request.data, dict) else {}
+        devoir_id = en_entier(donnees.get('devoir'))
+        devoir = devoirs_visibles_etudiant(etudiant).filter(pk=devoir_id).first() if devoir_id is not None else None
+        if devoir is None:
             raise ValidationError({'detail': "Devoir introuvable."})
         verifier_non_archivee(devoir.annee_academique)
-        if devoir.date_fin and timezone.now() > devoir.date_fin:
-            raise ValidationError("Le délai de soumission pour ce devoir est dépassé.")
-        return super().perform_create(serializer, etudiant=self.request.user, **kwargs)
+        verifier_fenetre_ouverte(devoir, etudiant)
+        if devoir.soumissions.filter(etudiant=etudiant).exists():
+            raise Conflit(MESSAGE_DEJA_SOUMIS)
+        try:
+            with transaction.atomic():
+                # Verrou partagé avec la modification des exercices : ils ne changent pas pendant l'écriture.
+                Devoir.objects.select_for_update().get(pk=devoir.pk)
+                reponses = valider_reponses(devoir, donnees.get('reponses'))
+                if devoir.soumissions.filter(etudiant=etudiant).exists():
+                    raise Conflit(MESSAGE_DEJA_SOUMIS)
+                soumission = SoumissionDevoir.objects.create(devoir=devoir, etudiant=etudiant)
+                ReponseExercice.objects.bulk_create([
+                    ReponseExercice(soumission=soumission, exercice=exercice, fichiers=fichiers)
+                    for exercice, fichiers in reponses
+                ])
+        except IntegrityError:
+            # Deux envois simultanés : la contrainte d'unicité tranche, sans erreur 500.
+            raise Conflit(MESSAGE_DEJA_SOUMIS)
+        soumission = self.get_queryset().get(pk=soumission.pk)
+        return Response(self.get_serializer(soumission).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post'])
     def corriger(self, request, pk=None):
@@ -209,9 +282,10 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
             score = en_entier(score.strip() if isinstance(score, str) else score)
             if score is None:
                 raise ValidationError({'score': "Le score doit être un entier."})
-            bareme = soumission.devoir.bareme
-            if not 0 <= score <= bareme:
-                raise ValidationError({'score': f"Le score doit être compris entre 0 et {bareme.normalize():f}."})
+            # Score entier : au plus l'arrondi inférieur du barème du devoir.
+            maximum = math.floor(soumission.devoir.bareme)
+            if not 0 <= score <= maximum:
+                raise ValidationError({'score': f"Le score doit être compris entre 0 et {maximum}."})
             soumission.score = score
         soumission.commentaire = commentaire
         soumission.statut = 'corrige'
