@@ -18,6 +18,8 @@ from accounts.scoping import (
     q_filiere_niveau_etudiant, verifier_compte_du_perimetre, verifier_references_evaluation, MESSAGE_HORS_PERIMETRE,
 )
 from audit.services import log as audit_log
+from . import archives
+from .archives import ArchiveMixin
 from .models import (
     Etablissement, AnneeAcademique, Filiere, Niveau, UE, EC, Cours,
     Classe, Groupe, Inscription, EnseignantMatiere, AffectationEnseignant, Semestre, PeriodeEvaluation
@@ -206,10 +208,12 @@ L'équipe PEL"""
         })
 
 
-class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class AnneeAcademiqueViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = AnneeAcademique.objects.all()
     serializer_class = AnneeAcademiqueSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
+    annee_path = ''
+    actions_masquees = ()
     scope_path = 'etablissement'
     scope_etablissement_field = 'etablissement'
 
@@ -217,6 +221,18 @@ class AnneeAcademiqueViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return qs.filter(etablissement_id=user.etablissement_id)
 
     etudiant_scope = enseignant_scope
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=(SUPERADMIN, ADMIN))])
+    def archiver(self, request, pk=None):
+        annee = self.get_object()
+        archives.archiver(annee, request)
+        return Response(self.get_serializer(annee).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[RolePermission(write=(SUPERADMIN, ADMIN))])
+    def desarchiver(self, request, pk=None):
+        annee = self.get_object()
+        archives.desarchiver(annee, request)
+        return Response(self.get_serializer(annee).data)
 
     @staticmethod
     def _creer_annee_et_filieres(data, etablissement):

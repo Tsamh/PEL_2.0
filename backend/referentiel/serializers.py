@@ -49,10 +49,16 @@ class InviteAdminSerializer(serializers.Serializer):
 class AnneeAcademiqueSerializer(serializers.ModelSerializer):
     etablissement_nom = serializers.CharField(source='etablissement.nom', read_only=True, default=None)
     filieres = serializers.SerializerMethodField()
+    archivee_par_nom = serializers.SerializerMethodField()
 
     class Meta:
         model = AnneeAcademique
         fields = '__all__'
+        read_only_fields = ['archivee', 'archivee_le', 'archivee_par']  # modifiés par archiver / désarchiver, avec audit
+
+    def get_archivee_par_nom(self, obj):
+        u = obj.archivee_par
+        return (u.get_full_name() or u.username) if u else ''
 
     def get_filieres(self, obj):
         if 'include_filieres' not in self.context.get('view', {}).__class__.__name__:

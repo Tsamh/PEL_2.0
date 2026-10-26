@@ -38,6 +38,8 @@ class AuditLog(models.Model):
         ('validation_quiz', 'Validation de quiz'),
         ('refus_quiz', 'Refus de quiz'),
         ('parametres_etablissement', "Paramètres de l'établissement"),
+        ('archivage_annee', "Archivage d'une année académique"),
+        ('desarchivage_annee', "Désarchivage d'une année académique"),
     ]
 
     acteur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='actions_auditees')
