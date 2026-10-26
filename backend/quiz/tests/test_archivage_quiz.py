@@ -4,7 +4,7 @@ from django.test import TestCase
 from django.utils import timezone
 
 from accounts.testing import build_world, client_for
-from quiz.models import Question, Quiz, ReponseQuiz, SessionQuiz, TentativeQuiz
+from quiz.models import Choix, Question, Quiz, ReponseQuiz, SessionQuiz, TentativeQuiz
 from referentiel.models import AnneeAcademique
 
 Q = '/api/quiz'
@@ -24,6 +24,8 @@ class ArchivageQuizTests(TestCase):
         cls.sans_annee = Quiz.objects.create(titre='Sans année', filiere=a.filiere, est_publie=True, cree_par=a.ens)
         cls.sans_annee.classes.add(a.classe)
         cls.courte = Question.objects.create(quiz=cls.quiz, texte='Capitale ?', type_question='courte', points=1, ordre=2)
+        cls.q_libre = Question.objects.create(quiz=cls.sans_annee, texte='Libre ?', type_question='qcm', points=1, ordre=1)
+        cls.choix_libre = Choix.objects.create(question=cls.q_libre, texte='A', est_correct=True)
         cls.tentative = TentativeQuiz.objects.create(quiz=cls.quiz, etudiant=a.etu, numero=1,
                                                      fin_prevue=timezone.now() + timedelta(days=30))
         cls.session = SessionQuiz.objects.create(quiz=cls.quiz, ouverture=timezone.now(),
@@ -78,6 +80,14 @@ class ArchivageQuizTests(TestCase):
             g.post(f'{Q}/quizzes/{self.quiz.pk}/refuser/', {'motif': 'Non'}, format='json'),
             c.post(f'{Q}/quizzes/{self.quiz.pk}/publier_resultats/'),
             c.post(f'{Q}/quizzes/{self.quiz.pk}/code_acces/'),
+            c.delete(f'{Q}/quizzes/{self.quiz.pk}/code_acces/'),
+            c.patch(f'{Q}/questions/{self.q_libre.pk}/', {'quiz': self.quiz.pk}, format='json'),
+            c.patch(f'{Q}/questions/{self.a.question.pk}/', {'quiz': self.sans_annee.pk}, format='json'),
+            c.post(f'{Q}/choix/', {'question': self.a.question.pk, 'texte': 'Z', 'est_correct': False}, format='json'),
+            c.patch(f'{Q}/choix/{self.choix_libre.pk}/', {'question': self.a.question.pk}, format='json'),
+            c.post(f'{Q}/sessions-quiz/', {'quiz': self.quiz.pk, 'classes': [self.a.classe.pk], 'ouverture': timezone.now().isoformat(),
+                                           'fermeture': (timezone.now() + timedelta(hours=2)).isoformat()}, format='json'),
+            c.patch(f'{Q}/quizzes/{self.quiz.pk}/', {'questions': [{'texte': 'N', 'type_question': 'vf'}]}, format='json'),
             c.post(f'{Q}/reponses/{self.reponse.pk}/valider/', {'score': 1}, format='json'),
             client_for(self.a.etu).post(f'{Q}/quizzes/{self.quiz.pk}/demarrer/'),
             client_for(self.a.etu).put(f'{Q}/tentatives/{self.tentative.pk}/repondre/', {}, format='json'),
@@ -86,6 +96,7 @@ class ArchivageQuizTests(TestCase):
         for i, res in enumerate(cas):
             with self.subTest(cas=i):
                 self.assertEqual(res.status_code, 409, getattr(res, 'data', None))
+                self.assertIn('est archivée', str(res.data['detail']))
         self.assertEqual(Quiz.objects.get(pk=self.sans_annee.pk).annee_academique_id, None)
 
     def test_quiz_sans_annee_modifiable(self):
@@ -95,6 +106,8 @@ class ArchivageQuizTests(TestCase):
     def test_suivi_global(self):
         res = client_for(self.a.admin).get(f'{Q}/suivi/', {'regroupement': 'classe'})
         self.assertEqual(res.data['total']['nb_evaluations'], 1)
+        evals = client_for(self.a.admin).get(f'{Q}/suivi/evaluations/').data
+        self.assertEqual([e['quiz'] for e in evals], [self.sans_annee.pk])
         res = client_for(self.a.admin).get(f'{Q}/suivi/', {'regroupement': 'classe', 'archives': '1'})
         self.assertEqual(res.data['total']['nb_evaluations'], 1)
         self.assertEqual(client_for(self.a.admin).get(f'{Q}/suivi/evaluations/', {'archives': '1'}).data[0]['quiz'],

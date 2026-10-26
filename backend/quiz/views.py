@@ -328,6 +328,7 @@ class TentativeViewSet(viewsets.ReadOnlyModelViewSet):
 
 class ReponseViewSet(ArchiveMixin, EtablissementScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
     """Réponses courtes des tentatives soumises, pour la validation par l'enseignant."""
+    annee_path = 'tentative__quiz__annee_academique'
     queryset = (
         ReponseQuiz.objects
         .filter(question__type_question='courte', tentative__statut=TentativeQuiz.SOUMISE)
@@ -337,7 +338,6 @@ class ReponseViewSet(ArchiveMixin, EtablissementScopedMixin, mixins.ListModelMix
     )
     serializer_class = ReponseCorrectionSerializer
     permission_classes = [RolePermission(read=CREATEURS, write=CREATEURS)]
-    annee_path = 'tentative__quiz__annee_academique'
 
     def gestion_scope(self, qs, user):
         return qs.filter(q_evaluation_etablissement(user.etablissement_id, prefix='tentative__quiz__'))
