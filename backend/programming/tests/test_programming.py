@@ -1,10 +1,10 @@
-import json
+from decimal import Decimal
 
 from django.test import TestCase
 
 from accounts.testing import build_world, client_for, make_user
 from audit.models import AuditLog
-from programming.models import Devoir, SoumissionDevoir, NoteMatiere
+from programming.models import CasDeTest, Devoir, NoteMatiere, ReponseExercice, SoumissionDevoir
 
 P = '/api/programming'
 
@@ -20,11 +20,17 @@ class DevoirsTests(TestCase):
 
     def test_etudiant_ne_recoit_ni_solution_ni_tests(self):
         a = self.w.a
+        CasDeTest.objects.create(exercice=a.exercice, ordre=2, entree='ENTREE_CACHEE', sortie_attendue='SORTIE_CACHEE')
         for url in (f'{P}/devoirs/', f'{P}/devoirs/{a.devoir.id}/'):
             with self.subTest(url=url):
-                contenu = json.dumps(client_for(a.etu).get(url).data)
+                res = client_for(a.etu).get(url)
+                self.assertEqual(res.status_code, 200)
+                contenu = res.content.decode('utf-8')
+                self.assertIn('Afficher 4', contenu)
                 self.assertNotIn('solution', contenu)
-                self.assertNotIn('test_cases', contenu)
+                self.assertNotIn('print(4)', contenu)
+                self.assertNotIn('ENTREE_CACHEE', contenu)
+                self.assertNotIn('SORTIE_CACHEE', contenu)
 
     def test_etudiant_limite_a_ses_filieres(self):
         a, b = self.w.a, self.w.b
@@ -54,8 +60,10 @@ class SoumissionsTests(TestCase):
     def test_etudiant_soumet_sur_un_devoir_visible(self):
         a, b = self.w.a, self.w.b
         client = client_for(a.etu)
-        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': a.devoir.id, 'code_soumis': 'print(4)'}, format='json').status_code, 201)
-        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': b.devoir.id, 'code_soumis': 'x'}, format='json').status_code, 400)
+        reponses = [{'exercice': a.exercice.id, 'fichiers': [{'nom': 'main.py', 'contenu': 'print(4)'}]}]
+        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': a.devoir.id, 'reponses': reponses}, format='json').status_code, 201)
+        reponses = [{'exercice': b.exercice.id, 'fichiers': []}]
+        self.assertEqual(client.post(f'{P}/soumissions/', {'devoir': b.devoir.id, 'reponses': reponses}, format='json').status_code, 400)
 
     def test_seul_l_etudiant_soumet(self):
         a = self.w.a
@@ -64,7 +72,7 @@ class SoumissionsTests(TestCase):
 
     def test_correction(self):
         a, b = self.w.a, self.w.b
-        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='print(4)')
+        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         url = f'{P}/soumissions/{soumission.id}/corriger/'
         self.assertEqual(client_for(a.etu).post(url, {'score': 20}, format='json').status_code, 403)
         self.assertEqual(client_for(b.ens).post(url, {'score': 20}, format='json').status_code, 404)
@@ -77,7 +85,7 @@ class SoumissionsTests(TestCase):
 
     def test_etudiant_ne_modifie_pas_sa_soumission(self):
         a = self.w.a
-        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         res = client_for(a.etu).patch(f'{P}/soumissions/{soumission.id}/', {'code_soumis': 'y'}, format='json')
         self.assertEqual(res.status_code, 403)
 
@@ -127,6 +135,26 @@ class NotesTests(TestCase):
         self.assertEqual(client_for(a.etu).post(f'{P}/notes/', {}, format='json').status_code, 403)
         self.assertEqual(client_for(a.etu).get(f'{P}/notes/mes_notes/').status_code, 200)
         self.assertEqual(client_for(a.ens).get(f'{P}/notes/mes_notes/').status_code, 403)
+
+    def _note_prog(self, *points):
+        a = self.w.a
+        a.exercice.points = points[0]
+        a.exercice.save()
+        for i, p in enumerate(points[1:], start=2):
+            a.devoir.exercices.create(ordre=i, titre=f'Exercice {i}', points=p)
+        NoteMatiere.objects.create(etudiant=a.etu, ec=a.ec, classe=a.classe, annee_academique=a.annee)
+        maximum = int(sum(Decimal(str(p)) for p in points))
+        SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, statut='corrige', score=maximum)
+        res = client_for(a.etu).get(f'{P}/notes/mes_notes/')
+        self.assertEqual(res.status_code, 200)
+        return res.data[0]['note_devoir_prog']
+
+    def test_mes_notes_bareme_decimal_comme_l_enseignant(self):
+        # Score entier borné par floor(barème) : la note maximale vaut 20/20, comme dans GestionNotes.
+        self.assertEqual(self._note_prog('5', '5.5'), 20.0)
+
+    def test_mes_notes_bareme_inferieur_a_un_ignore(self):
+        self.assertIsNone(self._note_prog('0.5'))
 
 
 class ControlesNotesTests(TestCase):
@@ -192,10 +220,20 @@ class ControlesNotesTests(TestCase):
 
     def test_corriger_score_invalide(self):
         a = self.w.a
-        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         url = f'{P}/soumissions/{s.id}/corriger/'
         for score in ('abc', 25, -1, 1.5):
             self.assertEqual(client_for(a.ens).post(url, {'score': score}, format='json').status_code, 400, score)
+        s.refresh_from_db()
+        self.assertIsNone(s.score)
+
+    def test_corriger_corps_non_objet(self):
+        a = self.w.a
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
+        url = f'{P}/soumissions/{s.id}/corriger/'
+        for corps in ([], [1, 2], 'texte'):
+            self.assertEqual(client_for(a.ens).post(url, corps, format='json').status_code, 400, corps)
+        self.assertEqual(client_for(a.ens).post(url, {'score': 3, 'commentaire': ['x']}, format='json').status_code, 400)
         s.refresh_from_db()
         self.assertIsNone(s.score)
 
@@ -246,7 +284,7 @@ class AuditEtValidationNotesTests(TestCase):
 
     def test_suppression_soumission_journalisee(self):
         a = self.w.a
-        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x', score=8)
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, score=8)
         self.assertEqual(client_for(a.ens).delete(f'{P}/soumissions/{s.id}/').status_code, 204)
         log = AuditLog.objects.get(action='modification_note')
         self.assertEqual(log.details['type'], 'soumission')
@@ -257,12 +295,14 @@ class AuditEtValidationNotesTests(TestCase):
     def test_correcteur_ne_modifie_ni_code_ni_devoir(self):
         a = self.w.a
         autre = Devoir.objects.create(titre='Autre', filiere=a.filiere, cree_par=a.ens, est_publie=True)
-        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='original')
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
+        fichiers = [{'nom': 'main.py', 'contenu': 'original'}]
+        ReponseExercice.objects.create(soumission=s, exercice=a.exercice, fichiers=fichiers)
         res = client_for(a.ens).patch(f'{P}/soumissions/{s.id}/',
-                                      {'code_soumis': 'falsifie', 'devoir': autre.id}, format='json')
+                                      {'reponses': [], 'code_soumis': 'falsifie', 'devoir': autre.id}, format='json')
         self.assertIn(res.status_code, (200, 400))
         s.refresh_from_db()
-        self.assertEqual(s.code_soumis, 'original')
+        self.assertEqual([r.fichiers for r in s.reponses.all()], [fichiers])
         self.assertEqual(s.devoir_id, a.devoir.id)
 
     def test_note_directe_hors_bornes(self):
@@ -289,7 +329,7 @@ class EntreesNumeriquesTests(TestCase):
 
     def test_corriger_score_chiffre_non_ascii(self):
         a = self.w.a
-        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='x')
+        s = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         res = client_for(a.ens).post(f'{P}/soumissions/{s.id}/corriger/', {'score': '²'}, format='json')
         self.assertEqual(res.status_code, 400)
 

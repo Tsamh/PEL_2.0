@@ -107,7 +107,7 @@ class CreationSuppressionTests(TestCase):
         self.assertEqual(client_for(self.w.a.admin).delete(f'/api/accounts/users/{self.w.a.etu.id}/').status_code, 403)
 
     def test_suppression_refusee_si_historique(self):
-        SoumissionDevoir.objects.create(devoir=self.w.a.devoir, etudiant=self.w.a.etu, code_soumis='print(4)')
+        SoumissionDevoir.objects.create(devoir=self.w.a.devoir, etudiant=self.w.a.etu)
         res = client_for(self.w.superadmin).delete(f'/api/accounts/users/{self.w.a.etu.id}/')
         self.assertEqual(res.status_code, 400)
 

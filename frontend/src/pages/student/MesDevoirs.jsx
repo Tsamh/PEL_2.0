@@ -1,6 +1,24 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import api from '../../services/api';
+import { chargerTout } from '../../services/pagination';
+import { messageErreur } from '../../services/erreurs';
+import { LANGAGES } from '../../components/devoirs/exercices';
+
+const formatDate = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '-');
+
+// État d'un devoir pour l'étudiant : soumis (ou corrigé), ouvert, à venir avec sa date, fermé.
+function etatDevoir(devoir, soumission) {
+  const etat = devoir.etat || {};
+  if (etat.soumis || soumission) {
+    if (soumission?.statut === 'corrige' && soumission.score !== null && soumission.score !== undefined) {
+      return ['badge-active', `Corrigé (${soumission.score} / ${Number(devoir.bareme)})`];
+    }
+    return ['badge-active', 'Soumis'];
+  }
+  if (etat.ouvert) return ['badge-active', 'Ouvert'];
+  if (etat.fenetre?.prochaine_ouverture) return ['badge-pending', `À venir, le ${formatDate(etat.fenetre.prochaine_ouverture)}`];
+  return ['badge-inactive', 'Fermé'];
+}
 
 export default function MesDevoirsEtudiant() {
   const [items, setItems] = useState([]);
@@ -9,28 +27,13 @@ export default function MesDevoirsEtudiant() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      setError('');
-      try {
-        const [devoirsRes, soumissionsRes] = await Promise.all([
-          api.get('/programming/devoirs/'),
-          api.get('/programming/soumissions/'),
-        ]);
-        setItems(devoirsRes.data.results || devoirsRes.data);
-        setSoumissions(soumissionsRes.data.results || soumissionsRes.data);
-      } catch (err) {
-        setError('Erreur lors du chargement des devoirs.');
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
+    Promise.all([chargerTout('/programming/devoirs/'), chargerTout('/programming/soumissions/')])
+      .then(([devoirs, subs]) => { setItems(devoirs); setSoumissions(subs); setError(''); })
+      .catch((err) => setError(messageErreur(err, 'Erreur lors du chargement des devoirs.')))
+      .finally(() => setLoading(false));
   }, []);
 
   const getSoumission = (devoirId) => soumissions.find((s) => s.devoir === devoirId);
-
-  const langageLabel = { python: 'Python', java: 'Java', c: 'C', cpp: 'C++', javascript: 'JavaScript', autre: 'Autre' };
 
   return (
     <div>
@@ -47,36 +50,29 @@ export default function MesDevoirsEtudiant() {
           <div className="empty-state">
             <div className="empty-icon">💻</div>
             <h3>Aucun devoir</h3>
-            <p>Il n'y a pas de devoir en cours pour le moment.</p>
+            <p>Aucun devoir ne vous est affecté pour le moment.</p>
           </div>
         ) : (
           <table className="data-table">
             <thead>
-              <tr><th>Titre</th><th>Langage</th><th>Points</th><th>Échéance</th><th>Statut</th><th>Actions</th></tr>
+              <tr><th>Titre</th><th>Langage</th><th>Exercices</th><th>Barème</th><th>Échéance</th><th>État</th><th>Actions</th></tr>
             </thead>
             <tbody>
               {items.map((item) => {
                 const sub = getSoumission(item.id);
+                const [classe, libelle] = etatDevoir(item, sub);
+                const aRendre = item.etat?.ouvert && !item.etat?.soumis && !sub;
                 return (
                   <tr key={item.id}>
-                    <td><strong>{item.titre}</strong></td>
-                    <td><span className="badge badge-active">{langageLabel[item.langage] || item.langage}</span></td>
-                    <td>{item.points_max} pts</td>
-                    <td>{item.date_fin ? new Date(item.date_fin).toLocaleDateString('fr-FR') : '-'}</td>
+                    <td><strong>{item.titre}</strong>{item.ec_libelle && <div style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>{item.ec_libelle}</div>}</td>
+                    <td><span className="badge badge-active">{item.langage_display || LANGAGES[item.langage] || item.langage}</span></td>
+                    <td>{(item.exercices || []).length}</td>
+                    <td>{Number(item.bareme)} pts</td>
+                    <td>{formatDate(item.etat?.fenetre?.fermeture)}</td>
+                    <td><span className={`badge ${classe}`}>{libelle}</span></td>
                     <td>
-                      {sub ? (
-                        sub.statut === 'corrige' ? (
-                          <span className="badge badge-active">Corrigé ({sub.score}/{item.points_max})</span>
-                        ) : (
-                          <span className="badge badge-active">Soumis</span>
-                        )
-                      ) : (
-                        <span className="badge badge-inactive">À rendre</span>
-                      )}
-                    </td>
-                    <td>
-                      <Link to={`/devoirs/${item.id}`} className={`btn btn-sm ${sub ? 'btn-secondary' : 'btn-primary'}`}>
-                        {sub ? 'Voir' : 'Soumettre'}
+                      <Link to={`/devoirs/${item.id}`} className={`btn btn-sm ${aRendre ? 'btn-primary' : 'btn-secondary'}`}>
+                        {aRendre ? 'Composer' : 'Voir'}
                       </Link>
                     </td>
                   </tr>

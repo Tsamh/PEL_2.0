@@ -3,6 +3,7 @@ import api from '../../services/api';
 import { messageErreur } from '../../services/erreurs';
 import { useAuth } from '../../context/AuthContext';
 import { resumeCibles } from '../../components/quiz/cibles';
+import ApercuDevoir from '../../components/devoirs/ApercuDevoir';
 
 const TYPES = { qcm: 'QCM', vf: 'Vrai / Faux', courte: 'Réponse courte' };
 const formatDate = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '-');
@@ -27,134 +28,116 @@ function Apercu({ quiz }) {
   );
 }
 
-export default function ValidationQuiz() {
-  const { user } = useAuth();
-  const peutRegler = user?.role === 'admin';
-  const [etablissement, setEtablissement] = useState(null);
-  const [quiz, setQuiz] = useState([]);
+// File d'attente d'un type d'évaluation : chargement paginé, aperçu, validation et refus avec motif.
+const SOURCES = {
+  quiz: {
+    url: '/quiz/quizzes/', titre: 'Quiz', colonneTitre: 'Quiz', vide: 'Aucun quiz en attente.', colonne: 'Questions',
+    erreur: 'Erreur lors du chargement des quiz en attente.',
+    sousTitre: (q) => q.description,
+    contenu: (q) => q.questions.length,
+    nbCibles: (q) => q.nb_cibles,
+    apercu: (q) => <Apercu quiz={q} />,
+  },
+  devoir: {
+    url: '/programming/devoirs/', titre: 'Devoirs', colonneTitre: 'Devoir', vide: 'Aucun devoir en attente.', colonne: 'Exercices',
+    erreur: 'Erreur lors du chargement des devoirs en attente.',
+    sousTitre: (d) => d.langage_display,
+    contenu: (d) => `${d.nb_exercices ?? (d.exercices || []).length} (${Number(d.bareme)} pts)`,
+    nbCibles: (d) => d.classes_detail.length + d.groupes_detail.length + d.etudiants_detail.length,
+    apercu: (d) => <ApercuDevoir devoir={d} />,
+  },
+};
+
+function FileAttente({ type, onMessage, onErreur }) {
+  const source = SOURCES[type];
+  const [items, setItems] = useState([]);
   const [suivant, setSuivant] = useState(null);
   const [ouvert, setOuvert] = useState(null);
   const [refus, setRefus] = useState({ id: null, motif: '' });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
   const [enCours, setEnCours] = useState(false);
 
-  const chargerFile = useCallback(async () => {
+  const charger = useCallback(async () => {
     try {
-      const res = await api.get('/quiz/quizzes/', { params: { statut_validation: 'en_attente' } });
-      setQuiz(res.data.results);
-      setSuivant(res.data.next);
+      const res = await api.get(source.url, { params: { statut_validation: 'en_attente' } });
+      setItems(res.data.results || res.data);
+      setSuivant(res.data.next || null);
     } catch (err) {
-      setError(messageErreur(err, 'Erreur lors du chargement des quiz en attente.'));
+      onErreur(messageErreur(err, source.erreur));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [source, onErreur]);
 
-  useEffect(() => {
-    chargerFile();
-    if (user?.role !== 'superadmin') {
-      api.get('/referentiel/etablissements/')
-        .then((res) => setEtablissement((res.data.results || res.data)[0] || null))
-        .catch((err) => setError(messageErreur(err, "Erreur lors du chargement de l'établissement.")));
-    }
-  }, [chargerFile, user?.role]);
+  useEffect(() => { charger(); }, [charger]);
 
   const executer = async (action, succes, defaut) => {
-    setError('');
-    setMessage('');
+    onErreur('');
+    onMessage('');
     setEnCours(true);
     try {
       await action();
-      setMessage(succes);
-      await chargerFile();
+      onMessage(succes);
+      await charger();
     } catch (err) {
-      setError(messageErreur(err, defaut));
+      onErreur(messageErreur(err, defaut));
     } finally {
       setEnCours(false);
     }
   };
 
-  const basculerReglage = () => executer(async () => {
-    const res = await api.patch(`/referentiel/etablissements/${etablissement.id}/parametres/`, { validation_quiz_requise: !etablissement.validation_quiz_requise });
-    setEtablissement(res.data);
-  }, 'Réglage enregistré.', "Erreur lors de l'enregistrement du réglage.");
+  const valider = (e) => executer(() => api.post(`${source.url}${e.id}/valider/`), `« ${e.titre} » est validé et publié.`, 'Erreur lors de la validation.');
 
-  const valider = (q) => executer(() => api.post(`/quiz/quizzes/${q.id}/valider/`), `« ${q.titre} » est validé et publié.`, 'Erreur lors de la validation.');
-
-  const refuser = (q) => executer(async () => {
-    await api.post(`/quiz/quizzes/${q.id}/refuser/`, { motif: refus.motif });
+  const refuser = (e) => executer(async () => {
+    await api.post(`${source.url}${e.id}/refuser/`, { motif: refus.motif });
     setRefus({ id: null, motif: '' });
-  }, `« ${q.titre} » est renvoyé à son auteur.`, 'Erreur lors du refus.');
+  }, `« ${e.titre} » est renvoyé à son auteur.`, 'Erreur lors du refus.');
 
   const plus = async () => {
     try {
       const res = await api.get(suivant);
-      setQuiz((l) => [...l, ...res.data.results]);
+      setItems((l) => [...l, ...res.data.results]);
       setSuivant(res.data.next);
     } catch (err) {
-      setError(messageErreur(err, 'Erreur lors du chargement des quiz en attente.'));
+      onErreur(messageErreur(err, source.erreur));
     }
   };
 
   return (
-    <div>
-      <div className="page-header">
-        <h1>Validation des quiz</h1>
-      </div>
-      {error && <div className="alert alert-error">{error}</div>}
-      {message && <div className="alert alert-success">{message}</div>}
-
-      {etablissement && (
-        <div className="table-container" style={{ padding: '16px', marginBottom: '16px' }}>
-          <strong>Réglage de l'établissement :</strong>{' '}
-          {etablissement.validation_quiz_requise
-            ? 'les quiz des enseignants doivent être validés avant publication.'
-            : 'les enseignants publient leurs quiz directement.'}
-          {peutRegler && (
-            <div style={{ marginTop: '8px' }}>
-              <button type="button" className="btn btn-sm btn-secondary" onClick={basculerReglage}>
-                {etablissement.validation_quiz_requise ? 'Ne plus exiger de validation' : 'Exiger une validation avant publication'}
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      <h2>En attente de validation</h2>
-      <div className="table-container">
-        {loading ? <div className="loading">Chargement...</div> : quiz.length === 0 ? (
-          <div className="empty-state"><p>Aucun quiz en attente.</p></div>
+    <>
+      <h2>{source.titre} en attente de validation</h2>
+      <div className="table-container" style={{ marginBottom: '24px' }}>
+        {loading ? <div className="loading">Chargement...</div> : items.length === 0 ? (
+          <div className="empty-state"><p>{source.vide}</p></div>
         ) : (
           <>
             <table className="data-table">
-              <thead><tr><th>Quiz</th><th>Auteur</th><th>Soumis le</th><th>Questions</th><th>Cible</th><th>Actions</th></tr></thead>
+              <thead><tr><th>{source.colonneTitre}</th><th>Auteur</th><th>Soumis le</th><th>{source.colonne}</th><th>Cible</th><th>Actions</th></tr></thead>
               <tbody>
-                {quiz.map((q) => (
-                  <Fragment key={q.id}>
+                {items.map((e) => (
+                  <Fragment key={e.id}>
                     <tr>
-                      <td><strong>{q.titre}</strong>{q.description && <div style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>{q.description}</div>}</td>
-                      <td>{q.cree_par_nom || '-'}</td>
-                      <td>{formatDate(q.soumis_le)}</td>
-                      <td>{q.questions.length}</td>
-                      <td>{q.nb_cibles > 0 ? resumeCibles(q.classes_detail.length, q.groupes_detail.length, q.etudiants_detail.length) : 'Non affecté'}</td>
+                      <td><strong>{e.titre}</strong>{source.sousTitre(e) && <div style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>{source.sousTitre(e)}</div>}</td>
+                      <td>{e.cree_par_nom || '-'}</td>
+                      <td>{formatDate(e.soumis_le)}</td>
+                      <td>{source.contenu(e)}</td>
+                      <td>{source.nbCibles(e) > 0 ? resumeCibles(e.classes_detail.length, e.groupes_detail.length, e.etudiants_detail.length) : 'Non affecté'}</td>
                       <td style={{ whiteSpace: 'nowrap' }}>
-                        <button type="button" className="btn btn-sm btn-outline" style={{ marginRight: '6px' }} onClick={() => setOuvert(ouvert === q.id ? null : q.id)}>{ouvert === q.id ? 'Masquer' : 'Aperçu'}</button>
-                        <button type="button" className="btn btn-sm btn-primary" style={{ marginRight: '6px' }} disabled={enCours} onClick={() => valider(q)}>Valider</button>
-                        <button type="button" className="btn btn-sm btn-danger" onClick={() => setRefus({ id: q.id, motif: '' })}>Refuser</button>
+                        <button type="button" className="btn btn-sm btn-outline" style={{ marginRight: '6px' }} onClick={() => setOuvert(ouvert === e.id ? null : e.id)}>{ouvert === e.id ? 'Masquer' : 'Aperçu'}</button>
+                        <button type="button" className="btn btn-sm btn-primary" style={{ marginRight: '6px' }} disabled={enCours} onClick={() => valider(e)}>Valider</button>
+                        <button type="button" className="btn btn-sm btn-danger" onClick={() => setRefus({ id: e.id, motif: '' })}>Refuser</button>
                       </td>
                     </tr>
-                    {ouvert === q.id && <tr><td colSpan={6}><Apercu quiz={q} /></td></tr>}
-                    {refus.id === q.id && (
+                    {ouvert === e.id && <tr><td colSpan={6}>{source.apercu(e)}</td></tr>}
+                    {refus.id === e.id && (
                       <tr>
                         <td colSpan={6}>
                           <div className="form-group" style={{ margin: '4px 0' }}>
                             <label>Motif du refus (envoyé à l'auteur)</label>
-                            <textarea rows={2} maxLength={2000} value={refus.motif} onChange={(e) => setRefus({ id: q.id, motif: e.target.value })} />
+                            <textarea rows={2} maxLength={2000} value={refus.motif} onChange={(ev) => setRefus({ id: e.id, motif: ev.target.value })} />
                           </div>
                           <div style={{ display: 'flex', gap: '6px' }}>
-                            <button type="button" className="btn btn-sm btn-danger" disabled={enCours || !refus.motif.trim()} onClick={() => refuser(q)}>Confirmer le refus</button>
+                            <button type="button" className="btn btn-sm btn-danger" disabled={enCours || !refus.motif.trim()} onClick={() => refuser(e)}>Confirmer le refus</button>
                             <button type="button" className="btn btn-sm btn-secondary" onClick={() => setRefus({ id: null, motif: '' })}>Annuler</button>
                           </div>
                         </td>
@@ -168,6 +151,72 @@ export default function ValidationQuiz() {
           </>
         )}
       </div>
+    </>
+  );
+}
+
+const ONGLETS = [['quiz', 'Quiz'], ['devoir', 'Devoirs']];
+
+export default function ValidationQuiz() {
+  const { user } = useAuth();
+  const peutRegler = user?.role === 'admin';
+  const [etablissement, setEtablissement] = useState(null);
+  const [onglet, setOnglet] = useState('quiz');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (user?.role !== 'superadmin') {
+      api.get('/referentiel/etablissements/')
+        .then((res) => setEtablissement((res.data.results || res.data)[0] || null))
+        .catch((err) => setError(messageErreur(err, "Erreur lors du chargement de l'établissement.")));
+    }
+  }, [user?.role]);
+
+  const basculerReglage = async () => {
+    setError('');
+    setMessage('');
+    try {
+      const res = await api.patch(`/referentiel/etablissements/${etablissement.id}/parametres/`, { validation_quiz_requise: !etablissement.validation_quiz_requise });
+      setEtablissement(res.data);
+      setMessage('Réglage enregistré.');
+    } catch (err) {
+      setError(messageErreur(err, "Erreur lors de l'enregistrement du réglage."));
+    }
+  };
+
+  const changerOnglet = (cle) => { setOnglet(cle); setError(''); setMessage(''); };
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Validation des évaluations</h1>
+      </div>
+      {error && <div className="alert alert-error">{error}</div>}
+      {message && <div className="alert alert-success">{message}</div>}
+
+      {etablissement && (
+        <div className="table-container" style={{ padding: '16px', marginBottom: '16px' }}>
+          <strong>Réglage de l'établissement :</strong>{' '}
+          {etablissement.validation_quiz_requise
+            ? 'les quiz et les devoirs des enseignants doivent être validés avant publication.'
+            : 'les enseignants publient leurs quiz et leurs devoirs directement.'}
+          {peutRegler && (
+            <div style={{ marginTop: '8px' }}>
+              <button type="button" className="btn btn-sm btn-secondary" onClick={basculerReglage}>
+                {etablissement.validation_quiz_requise ? 'Ne plus exiger de validation' : 'Exiger une validation avant publication'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+        {ONGLETS.map(([cle, libelle]) => (
+          <button key={cle} type="button" className={`btn btn-sm ${onglet === cle ? 'btn-primary' : 'btn-secondary'}`} onClick={() => changerOnglet(cle)}>{libelle}</button>
+        ))}
+      </div>
+      <FileAttente key={onglet} type={onglet} onMessage={setMessage} onErreur={setError} />
     </div>
   );
 }

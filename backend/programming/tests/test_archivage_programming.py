@@ -17,7 +17,7 @@ class ArchivageProgrammingTests(TestCase):
     def setUpTestData(cls):
         cls.w = build_world()
         a = cls.w.a
-        cls.soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu, code_soumis='print(4)')
+        cls.soumission = SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=a.etu)
         cls.note = NoteMatiere.objects.create(etudiant=a.etu, ec=a.ec, classe=a.classe, annee_academique=a.annee,
                                               note_devoir=12)
         AnneeAcademique.objects.filter(pk=a.annee.pk).update(archivee=True)

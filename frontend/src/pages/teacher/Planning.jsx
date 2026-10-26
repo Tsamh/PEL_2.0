@@ -17,9 +17,36 @@ function cibles(s) {
   return [...s.classes_detail.map((c) => c.code), ...s.groupes_detail.map((g) => g.libelle)].join(', ');
 }
 
+// Deux sources paginées, chacune triée par ouverture : quiz et devoirs.
+const SOURCES = [
+  { type: 'quiz', url: '/quiz/sessions-quiz/' },
+  { type: 'devoir', url: '/programming/sessions-devoir/' },
+];
+
+const marquer = (type, liste) => liste.map((s) => ({ ...s, evaluation: type }));
+const cle = (s) => `${s.evaluation}-${s.id}`;
+const parOuverture = (a, b) => new Date(a.ouverture) - new Date(b.ouverture) || a.evaluation.localeCompare(b.evaluation) || a.id - b.id;
+
+// Fusion des sources : seules les sessions qui ouvrent avant la dernière chargée de chaque source
+// incomplète sont montrées, pour que l'ordre reste exact quand une page suivante arrive.
+function fusion(sources) {
+  const limites = SOURCES.filter((src) => sources[src.type].suivant && sources[src.type].sessions.length > 0)
+    .map((src) => new Date(sources[src.type].sessions[sources[src.type].sessions.length - 1].ouverture).getTime());
+  const limite = limites.length > 0 ? Math.min(...limites) : Infinity;
+  return SOURCES.flatMap((src) => sources[src.type].sessions)
+    .filter((s) => new Date(s.ouverture).getTime() <= limite)
+    .sort(parOuverture);
+}
+
+const etatVide = { quiz: { sessions: [], suivant: null }, devoir: { sessions: [], suivant: null } };
+
+function lienEvaluation(s) {
+  if (s.evaluation === 'devoir') return <Link to={`/devoirs/${s.devoir}/corrections`}>{s.devoir_titre}</Link>;
+  return <Link to={`/quiz/${s.quiz}/statistiques`}>{s.quiz_titre}</Link>;
+}
+
 export default function Planning() {
-  const [sessions, setSessions] = useState([]);
-  const [suivant, setSuivant] = useState(null);
+  const [sources, setSources] = useState(etatVide);
   const [periodes, setPeriodes] = useState([]);
   const [periode, setPeriode] = useState('');
   const [passees, setPassees] = useState(false);
@@ -33,17 +60,34 @@ export default function Planning() {
 
   useEffect(() => {
     setLoading(true);
-    api.get('/quiz/sessions-quiz/', { params: { a_venir: passees ? undefined : '1', periode: periode || undefined } })
-      .then((res) => { setSessions(res.data.results); setSuivant(res.data.next); setError(''); })
+    const params = { a_venir: passees ? undefined : '1', periode: periode || undefined };
+    Promise.all(SOURCES.map((src) => api.get(src.url, { params })))
+      .then((reponses) => {
+        setSources(Object.fromEntries(SOURCES.map((src, i) => [src.type, {
+          sessions: marquer(src.type, reponses[i].data.results || reponses[i].data), suivant: reponses[i].data.next || null,
+        }])));
+        setError('');
+      })
       .catch((err) => setError(messageErreur(err, 'Erreur lors du chargement du planning.')))
       .finally(() => setLoading(false));
   }, [periode, passees]);
 
+  const sessions = fusion(sources);
+  const incompletes = SOURCES.filter((src) => sources[src.type].suivant);
+
+  // Charge la page suivante de la source qui limite l'affichage (celle dont la dernière session ouvre le plus tôt).
   const plus = async () => {
+    const derniere = (src) => {
+      const l = sources[src.type].sessions;
+      return l.length > 0 ? new Date(l[l.length - 1].ouverture).getTime() : -Infinity;
+    };
+    const src = incompletes.reduce((a, b) => (derniere(b) < derniere(a) ? b : a));
     try {
-      const res = await api.get(suivant);
-      setSessions((l) => [...l, ...res.data.results]);
-      setSuivant(res.data.next);
+      const res = await api.get(sources[src.type].suivant);
+      setSources((etat) => ({
+        ...etat,
+        [src.type]: { sessions: [...etat[src.type].sessions, ...marquer(src.type, res.data.results)], suivant: res.data.next },
+      }));
     } catch (err) {
       setError(messageErreur(err, 'Erreur lors du chargement du planning.'));
     }
@@ -76,15 +120,16 @@ export default function Planning() {
         ) : (
           <>
             <table className="data-table">
-              <thead><tr><th>Ouverture</th><th>Fermeture</th><th>Quiz</th><th>Type</th><th>Cibles</th><th>État</th></tr></thead>
+              <thead><tr><th>Ouverture</th><th>Fermeture</th><th>Type d'évaluation</th><th>Évaluation</th><th>Session</th><th>Cibles</th><th>État</th></tr></thead>
               <tbody>
                 {sessions.map((s) => {
                   const [classe, libelle] = etat(s, maintenant);
                   return (
-                    <tr key={s.id}>
+                    <tr key={cle(s)}>
                       <td>{formatDate(s.ouverture)}</td>
                       <td>{formatDate(s.fermeture)}</td>
-                      <td><Link to={`/quiz/${s.quiz}/statistiques`}>{s.quiz_titre}</Link>{s.libelle && <div style={{ fontSize: '0.8rem', color: 'var(--gray-500)' }}>{s.libelle}</div>}</td>
+                      <td><span className="badge badge-active">{s.evaluation === 'devoir' ? 'Devoir' : 'Quiz'}</span></td>
+                      <td>{lienEvaluation(s)}{s.libelle && <div style={{ fontSize: '0.8rem', color: 'var(--gray-500)' }}>{s.libelle}</div>}</td>
                       <td>{s.type === 'rattrapage' ? 'Rattrapage' : 'Session'}</td>
                       <td>{cibles(s)}</td>
                       <td><span className={`badge ${classe}`}>{libelle}</span></td>
@@ -93,7 +138,7 @@ export default function Planning() {
                 })}
               </tbody>
             </table>
-            {suivant && <div style={{ padding: '12px', textAlign: 'right' }}><button className="btn btn-sm btn-secondary" onClick={plus}>Afficher plus</button></div>}
+            {incompletes.length > 0 && <div style={{ padding: '12px', textAlign: 'right' }}><button className="btn btn-sm btn-secondary" onClick={plus}>Afficher plus</button></div>}
           </>
         )}
       </div>

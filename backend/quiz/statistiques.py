@@ -40,15 +40,16 @@ def _nom(user):
     return user.get_full_name() or user.username
 
 
-def etudiants_affectes(quiz):
-    """Étudiants affectés au quiz : par classe, par groupe (inscrits dans la classe du groupe) ou nominativement."""
+def etudiants_affectes(evaluation):
+    """Étudiants affectés à l'évaluation (quiz ou devoir) : par classe, par groupe (inscrits dans la classe
+    du groupe) ou nominativement."""
     User = get_user_model()
-    par_classe = User.objects.filter(inscriptions__classe__quizzes_affectes=quiz).values('pk')
+    par_classe = User.objects.filter(inscriptions__classe__in=evaluation.classes.values('pk')).values('pk')
     par_groupe = User.objects.filter(
-        groupes__quizzes_affectes=quiz, groupes__classe__inscriptions__etudiant=F('pk'),
+        groupes__in=evaluation.groupes.values('pk'), groupes__classe__inscriptions__etudiant=F('pk'),
     ).values('pk')
     return User.objects.filter(role=ETUDIANT).filter(
-        Q(pk__in=par_classe) | Q(pk__in=par_groupe) | Q(pk__in=quiz.etudiants.values('pk'))
+        Q(pk__in=par_classe) | Q(pk__in=par_groupe) | Q(pk__in=evaluation.etudiants.values('pk'))
     )
 
 
