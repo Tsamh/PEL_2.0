@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../services/api';
+import CaseArchives from '../components/CaseArchives';
 
 export default function Classes() {
   const [items, setItems] = useState([]);
@@ -12,19 +13,22 @@ export default function Classes() {
   const [editingItem, setEditingItem] = useState(null);
   const [form, setForm] = useState({ code: '', libelle: '', filiere: '', niveau: '', annee_academique: '', effectif_max: 60 });
   const [saving, setSaving] = useState(false);
+  const [archives, setArchives] = useState(false);
 
   useEffect(() => {
-    fetchItems();
     api.get('/referentiel/filieres/').then((res) => setFilieres(res.data.results || res.data));
     api.get('/referentiel/niveaux/').then((res) => setNiveaux(res.data.results || res.data));
-    api.get('/referentiel/annees-academiques/').then((res) => setAnnees(res.data.results || res.data));
+    api.get('/referentiel/annees-academiques/').then((res) => setAnnees((res.data.results || res.data).filter((a) => !a.archivee)));
   }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchItems(); }, [archives]);
 
   const fetchItems = async () => {
     setLoading(true);
     setError('');
     try {
-      const res = await api.get('/referentiel/classes/');
+      const res = await api.get('/referentiel/classes/', { params: archives ? { archives: '1' } : {} });
       setItems(res.data.results || res.data);
     } catch (err) {
       setError('Erreur lors du chargement des données.');
@@ -78,8 +82,10 @@ export default function Classes() {
     <div>
       <div className="page-header">
         <h1>Classes</h1>
-        <button className="btn btn-primary" onClick={openCreate}>+ Ajouter</button>
+        {!archives && <button className="btn btn-primary" onClick={openCreate}>+ Ajouter</button>}
       </div>
+
+      <CaseArchives archives={archives} onChange={setArchives} />
 
       {error && <div className="alert alert-error">{error}</div>}
 
@@ -158,8 +164,12 @@ export default function Classes() {
                   <td>{item.niveau_libelle}</td>
                   <td>{item.annee_libelle}</td>
                   <td>
-                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{marginRight: '8px'}}>Modifier</button>
-                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>
+                    {!archives && (
+                      <>
+                        <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{marginRight: '8px'}}>Modifier</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>
+                      </>
+                    )}
                   </td>
                 </tr>
               ))}

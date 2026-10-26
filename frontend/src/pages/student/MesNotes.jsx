@@ -1,17 +1,20 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import CaseArchives from '../../components/CaseArchives';
 
 export default function MesNotes() {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [archives, setArchives] = useState(false);
 
-  useEffect(() => { fetchNotes(); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchNotes(); }, [archives]);
 
   const fetchNotes = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/programming/notes/mes_notes/');
+      const res = await api.get('/programming/notes/mes_notes/', { params: archives ? { archives: '1' } : {} });
       setNotes(res.data);
     } catch (err) {
       setError('Erreur lors du chargement des notes.');
@@ -32,6 +35,8 @@ export default function MesNotes() {
       <div className="page-header">
         <h1>Mes notes</h1>
       </div>
+
+      <CaseArchives archives={archives} onChange={setArchives} />
 
       {error && <div className="alert alert-error">{error}</div>}
 
