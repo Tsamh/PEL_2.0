@@ -68,8 +68,10 @@ export default function GestionNotes() {
           let count = 0;
           for (const s of etudSoums) {
             const devoir = devoirs.find((d) => d.id === s.devoir);
-            if (devoir && devoir.points_max > 0) {
-              totalNote += (s.score / devoir.points_max) * 20;
+            // La note d'un devoir est sur la partie entière de son barème.
+            const noteMax = devoir ? Math.floor(Number(devoir.bareme)) : 0;
+            if (noteMax > 0) {
+              totalNote += (s.score / noteMax) * 20;
               count++;
             }
           }

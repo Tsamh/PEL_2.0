@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
+import { messageErreur } from '../../services/erreurs';
+import { chargerTout } from '../../services/pagination';
 import CodeEditor from '../../components/CodeEditor';
+import { LANGAGES } from '../../components/devoirs/exercices';
 
 export default function Corrections() {
   const { id } = useParams();
@@ -20,14 +23,14 @@ export default function Corrections() {
     const fetchData = async () => {
       setLoading(true);
       try {
-        const [devoirRes, soumissionsRes] = await Promise.all([
+        const [devoirRes, liste] = await Promise.all([
           api.get(`/programming/devoirs/${id}/`),
-          api.get(`/programming/soumissions/?devoir=${id}`),
+          chargerTout('/programming/soumissions/', { devoir: id }),
         ]);
         setDevoir(devoirRes.data);
-        setSoumissions(soumissionsRes.data.results || soumissionsRes.data);
+        setSoumissions(liste);
       } catch (err) {
-        setError('Erreur lors du chargement.');
+        setError(messageErreur(err, 'Erreur lors du chargement.'));
       } finally {
         setLoading(false);
       }
@@ -40,11 +43,13 @@ export default function Corrections() {
     setScore(sub.score !== null && sub.score !== undefined ? sub.score.toString() : '');
     setCommentaire(sub.commentaire || '');
     setMessage('');
+    setError('');
   };
 
   const handleSave = async () => {
     setSaving(true);
     setMessage('');
+    setError('');
     try {
       const res = await api.post(`/programming/soumissions/${selected.id}/corriger/`, {
         score: score !== '' ? parseInt(score) : null,
@@ -54,7 +59,7 @@ export default function Corrections() {
       setMessage('Correction enregistrée !');
       setSelected(null);
     } catch (err) {
-      setError(err.response?.data?.error || 'Erreur lors de la sauvegarde.');
+      setError(messageErreur(err, 'Erreur lors de la sauvegarde.'));
     } finally {
       setSaving(false);
     }
@@ -66,7 +71,10 @@ export default function Corrections() {
     enAttente: soumissions.filter((s) => s.statut === 'soumis').length,
   };
 
-  const langageLabel = { python: 'Python', java: 'Java', c: 'C', cpp: 'C++', javascript: 'JavaScript', autre: 'Autre' };
+  // La note est un entier compris entre 0 et la partie entière du barème.
+  const noteMax = Math.floor(Number(devoir?.bareme) || 0);
+  const exercices = devoir?.exercices || [];
+  const reponsesDe = (sub) => Object.fromEntries((sub.reponses || []).map((r) => [r.exercice, r]));
 
   if (loading) return <div className="loading">Chargement...</div>;
 
@@ -75,11 +83,11 @@ export default function Corrections() {
       <div className="page-header">
         <div>
           <button className="btn btn-secondary" onClick={() => navigate(-1)} style={{ marginBottom: '8px' }}>← Retour</button>
-          <h1>{devoir?.titre} — Corrections</h1>
+          <h1>Corrections : {devoir?.titre}</h1>
         </div>
         <div>
-          <span className="badge badge-active">{langageLabel[devoir?.langage] || devoir?.langage}</span>
-          <span style={{ marginLeft: '12px', color: 'var(--gray-500)' }}>{devoir?.points_max} pts</span>
+          <span className="badge badge-active">{devoir?.langage_display || LANGAGES[devoir?.langage] || devoir?.langage}</span>
+          <span style={{ marginLeft: '12px', color: 'var(--gray-500)' }}>Barème : {Number(devoir?.bareme)} pts, {exercices.length} exercice{exercices.length > 1 ? 's' : ''}</span>
         </div>
       </div>
 
@@ -118,7 +126,7 @@ export default function Corrections() {
                 <tr key={sub.id}>
                   <td><strong>{sub.etudiant_nom}</strong></td>
                   <td>{new Date(sub.date_soumission).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
-                  <td>{sub.score !== null && sub.score !== undefined ? <strong>{sub.score} / {devoir?.points_max}</strong> : '—'}</td>
+                  <td>{sub.score !== null && sub.score !== undefined ? <strong>{sub.score} / {noteMax}</strong> : '-'}</td>
                   <td>
                     {sub.statut === 'corrige' ? (
                       <span className="badge badge-active">Corrigé</span>
@@ -142,21 +150,37 @@ export default function Corrections() {
         <div className="modal-overlay" onClick={() => setSelected(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '900px' }}>
             <div className="modal-header">
-              <h3>Correction — {selected.etudiant_nom}</h3>
+              <h3>Correction : {selected.etudiant_nom}</h3>
               <button className="close-btn" onClick={() => setSelected(null)}>×</button>
             </div>
             <div className="modal-body">
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ fontWeight: 600, display: 'block', marginBottom: '8px' }}>Code soumis :</label>
-                <CodeEditor language={devoir?.langage} value={selected.code_soumis} readOnly height="300px" />
-              </div>
+              {error && <div className="alert alert-error">{error}</div>}
+              {exercices.map((ex, i) => {
+                const reponse = reponsesDe(selected)[ex.id];
+                return (
+                  <div key={ex.id} style={{ marginBottom: '16px' }}>
+                    <label style={{ fontWeight: 600, display: 'block', marginBottom: '8px' }}>
+                      Exercice {i + 1} : {ex.titre} <span style={{ fontWeight: 'normal', color: 'var(--gray-500)' }}>({Number(ex.points)} pt{Number(ex.points) > 1 ? 's' : ''})</span>
+                    </label>
+                    {!reponse || reponse.fichiers.length === 0 ? (
+                      <p style={{ color: 'var(--gray-500)', fontSize: '0.9rem' }}>Aucune réponse rendue pour cet exercice.</p>
+                    ) : reponse.fichiers.map((f, j) => (
+                      <div key={j} style={{ marginBottom: '8px' }}>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--gray-500)', marginBottom: '4px' }}>{f.nom}</div>
+                        <CodeEditor language={devoir?.langage} value={f.contenu} readOnly height="250px" />
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
               <div className="form-row">
                 <div className="form-group" style={{ flex: '0 0 150px' }}>
-                  <label>Score / {devoir?.points_max}</label>
+                  <label>Note / {noteMax}</label>
                   <input
                     type="number"
                     min="0"
-                    max={devoir?.points_max}
+                    max={noteMax}
+                    step="1"
                     value={score}
                     onChange={(e) => setScore(e.target.value)}
                     placeholder="0"

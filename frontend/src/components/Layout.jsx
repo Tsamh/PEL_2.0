@@ -20,7 +20,7 @@ const adminMenu = [
   { path: '/responsables', label: 'Responsables', roles: ['superadmin', 'admin'] },
   { path: '/enseignants', label: 'Enseignants' },
   { path: '/quiz', label: 'Quiz' },
-  { path: '/validation-quiz', label: 'Validation des quiz' },
+  { path: '/validation-quiz', label: 'Validation des évaluations' },
   { path: '/banque', label: 'Banque de questions' },
   { path: '/statistiques', label: 'Statistiques des quiz' },
   { path: '/planning', label: 'Planning des évaluations' },

@@ -369,6 +369,7 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
                   <td>{periodeAffichee(item)}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {!archives && <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} style={{ marginRight: '8px' }}>Modifier</button>}
+                    <Link to={`/devoirs/${item.id}`} className="btn btn-sm btn-outline" style={{ marginRight: '8px' }}>Voir</Link>
                     <Link to={`/devoirs/${item.id}/corrections`} className="btn btn-sm btn-primary" style={{ marginRight: '8px' }}>Corrections</Link>
                     {!archives && <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item.id)}>Supprimer</button>}
                   </td>
