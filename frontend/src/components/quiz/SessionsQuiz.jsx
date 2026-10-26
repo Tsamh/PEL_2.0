@@ -8,12 +8,30 @@ const versIso = (local) => (local ? new Date(local).toISOString() : null);
 const formulaireVide = { libelle: '', ouverture: '', fermeture: '', periode: '', classes: [], groupes: [], etudiants: [], tentatives_supplementaires: 1 };
 const styleLigne = { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'normal', margin: '2px 0' };
 
-function cibles(s) {
-  if (s.type === 'rattrapage') return `${s.nb_etudiants} étudiant${s.nb_etudiants > 1 ? 's' : ''}, +${s.tentatives_supplementaires} tentative${s.tentatives_supplementaires > 1 ? 's' : ''}`;
+// Routes et textes propres au type d'évaluation ('quiz' ou 'devoir'). Les devoirs n'ont pas de tentatives :
+// le rattrapage rouvre la fenêtre et les candidats sont les étudiants sans soumission.
+const TYPES = {
+  quiz: {
+    nom: 'quiz', champ: 'quiz', sessions: '/quiz/sessions-quiz/', tentatives: true,
+    candidats: (id) => `/quiz/quizzes/${id}/candidats_rattrapage/`,
+  },
+  devoir: {
+    nom: 'devoir', champ: 'devoir', sessions: '/programming/sessions-devoir/', tentatives: false,
+    candidats: (id) => `/programming/devoirs/${id}/candidats_rattrapage/`,
+  },
+};
+
+function cibles(s, avecTentatives) {
+  if (s.type === 'rattrapage') {
+    const etudiants = `${s.nb_etudiants} étudiant${s.nb_etudiants > 1 ? 's' : ''}`;
+    if (!avecTentatives) return etudiants;
+    return `${etudiants}, +${s.tentatives_supplementaires} tentative${s.tentatives_supplementaires > 1 ? 's' : ''}`;
+  }
   return [...s.classes_detail.map((c) => c.code), ...s.groupes_detail.map((g) => g.libelle)].join(', ');
 }
 
-export default function SessionsQuiz({ quiz }) {
+export default function SessionsQuiz({ evaluation, type = 'quiz' }) {
+  const t = TYPES[type] || TYPES.quiz;
   const [sessions, setSessions] = useState([]);
   const [groupes, setGroupes] = useState([]);
   const [periodes, setPeriodes] = useState([]);
@@ -21,34 +39,36 @@ export default function SessionsQuiz({ quiz }) {
   const [form, setForm] = useState(formulaireVide);
   const [seuil, setSeuil] = useState(50);
   const [candidats, setCandidats] = useState([]);
+  const [candidatsCharges, setCandidatsCharges] = useState(false);
   const [erreur, setErreur] = useState('');
   const [message, setMessage] = useState('');
 
   const charger = useCallback(async () => {
     try {
-      setSessions(await chargerTout('/quiz/sessions-quiz/', { quiz: quiz.id }));
+      setSessions(await chargerTout(t.sessions, { [t.champ]: evaluation.id }));
     } catch (err) {
       setErreur(messageErreur(err, 'Erreur lors du chargement des sessions.'));
     }
-  }, [quiz.id]);
+  }, [evaluation.id, t.sessions, t.champ]);
 
   useEffect(() => {
     charger();
-    const classes = new Set((quiz.classes_detail || []).map((c) => c.id));
-    const affectes = new Set((quiz.groupes_detail || []).map((g) => g.id));
+    const classes = new Set((evaluation.classes_detail || []).map((c) => c.id));
+    const affectes = new Set((evaluation.groupes_detail || []).map((g) => g.id));
     Promise.all([chargerTout('/referentiel/groupes/'), chargerTout('/referentiel/periodes-evaluation/')])
       .then(([g, p]) => { setGroupes(g.filter((x) => classes.has(x.classe) || affectes.has(x.id))); setPeriodes(p); })
       .catch((err) => setErreur(messageErreur(err, 'Erreur lors du chargement des groupes et des périodes.')));
-  }, [charger, quiz.classes_detail, quiz.groupes_detail]);
+  }, [charger, evaluation.classes_detail, evaluation.groupes_detail]);
 
-  const ouvrir = (nouveauMode) => { setMode(nouveauMode); setForm(formulaireVide); setCandidats([]); setErreur(''); setMessage(''); };
+  const ouvrir = (nouveauMode) => { setMode(nouveauMode); setForm(formulaireVide); setCandidats([]); setCandidatsCharges(false); setErreur(''); setMessage(''); };
   const basculer = (cle, id) => setForm((f) => ({ ...f, [cle]: f[cle].includes(id) ? f[cle].filter((x) => x !== id) : [...f[cle], id] }));
 
   const proposer = async () => {
     setErreur('');
     try {
-      const res = await api.get(`/quiz/quizzes/${quiz.id}/candidats_rattrapage/`, { params: { seuil } });
+      const res = await api.get(t.candidats(evaluation.id), t.tentatives ? { params: { seuil } } : undefined);
       setCandidats(res.data);
+      setCandidatsCharges(true);
       setForm((f) => ({ ...f, etudiants: res.data.map((c) => c.id) }));
     } catch (err) {
       setErreur(messageErreur(err, 'Erreur lors du calcul des candidats.'));
@@ -58,14 +78,14 @@ export default function SessionsQuiz({ quiz }) {
   const enregistrer = async () => {
     setErreur('');
     const corps = {
-      quiz: quiz.id, type: mode, libelle: form.libelle, ouverture: versIso(form.ouverture), fermeture: versIso(form.fermeture),
+      [t.champ]: evaluation.id, type: mode, libelle: form.libelle, ouverture: versIso(form.ouverture), fermeture: versIso(form.fermeture),
       periode: form.periode || null,
       ...(mode === 'rattrapage'
-        ? { etudiants: form.etudiants, tentatives_supplementaires: Number(form.tentatives_supplementaires) }
+        ? { etudiants: form.etudiants, ...(t.tentatives ? { tentatives_supplementaires: Number(form.tentatives_supplementaires) } : {}) }
         : { classes: form.classes, groupes: form.groupes }),
     };
     try {
-      await api.post('/quiz/sessions-quiz/', corps);
+      await api.post(t.sessions, corps);
       setMode(null);
       setMessage(mode === 'rattrapage' ? 'Rattrapage planifié.' : 'Session planifiée.');
       charger();
@@ -77,7 +97,7 @@ export default function SessionsQuiz({ quiz }) {
   const supprimer = async (s) => {
     if (!window.confirm('Supprimer cette session ?')) return;
     try {
-      await api.delete(`/quiz/sessions-quiz/${s.id}/`);
+      await api.delete(`${t.sessions}${s.id}/`);
       charger();
     } catch (err) {
       setErreur(messageErreur(err, 'Erreur lors de la suppression.'));
@@ -85,11 +105,11 @@ export default function SessionsQuiz({ quiz }) {
   };
 
   return (
-    // Rendu dans le formulaire du quiz : Entrée ne doit pas enregistrer le quiz depuis un champ de session.
+    // Rendu dans le formulaire de l'évaluation : Entrée ne doit pas l'enregistrer depuis un champ de session.
     <div onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}>
       <h3 style={{ margin: '0 0 8px' }}>Sessions</h3>
       <p style={{ fontSize: '0.85rem', color: 'var(--gray-500)', margin: '0 0 12px' }}>
-        Sans session, les dates générales du quiz s'appliquent. Une session donne des dates propres à des classes ou groupes affectés ; un rattrapage rouvre le quiz pour des étudiants choisis.
+        Sans session, les dates générales du {t.nom} s'appliquent. Une session donne des dates propres à des classes ou groupes affectés ; un rattrapage rouvre le {t.nom} pour des étudiants choisis.
       </p>
       {erreur && <div className="alert alert-error">{erreur}</div>}
       {message && <div className="alert alert-success">{message}</div>}
@@ -103,7 +123,7 @@ export default function SessionsQuiz({ quiz }) {
                 <td>{s.libelle || '-'}</td>
                 <td>{formatDate(s.ouverture)}</td>
                 <td>{formatDate(s.fermeture)}</td>
-                <td>{cibles(s)}</td>
+                <td>{cibles(s, t.tentatives)}</td>
                 <td><button type="button" className="btn btn-sm btn-danger" onClick={() => supprimer(s)}>Supprimer</button></td>
               </tr>
             ))}
@@ -145,7 +165,7 @@ export default function SessionsQuiz({ quiz }) {
             <div className="form-row">
               <div className="form-group">
                 <label>Classes</label>
-                {(quiz.classes_detail || []).length === 0 ? <p style={{ color: 'var(--gray-500)' }}>Aucune classe affectée.</p> : quiz.classes_detail.map((c) => (
+                {(evaluation.classes_detail || []).length === 0 ? <p style={{ color: 'var(--gray-500)' }}>Aucune classe affectée.</p> : evaluation.classes_detail.map((c) => (
                   <label key={c.id} style={styleLigne}><input type="checkbox" style={{ width: 'auto' }} checked={form.classes.includes(c.id)} onChange={() => basculer('classes', c.id)} />{c.code} - {c.libelle}</label>
                 ))}
               </div>
@@ -158,23 +178,30 @@ export default function SessionsQuiz({ quiz }) {
             </div>
           ) : (
             <div>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label>Seuil (note en %)</label>
-                  <input type="number" min="0" max="100" value={seuil} onChange={(e) => setSeuil(e.target.value)} style={{ width: '100px' }} />
+              {t.tentatives ? (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label>Seuil (note en %)</label>
+                    <input type="number" min="0" max="100" value={seuil} onChange={(e) => setSeuil(e.target.value)} style={{ width: '100px' }} />
+                  </div>
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={proposer}>Proposer les absents et les notes sous le seuil</button>
+                  <div className="form-group" style={{ margin: 0 }}>
+                    <label>Tentatives en plus</label>
+                    <input type="number" min="0" max="10" value={form.tentatives_supplementaires} onChange={(e) => setForm({ ...form, tentatives_supplementaires: e.target.value })} style={{ width: '100px' }} />
+                  </div>
                 </div>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={proposer}>Proposer les absents et les notes sous le seuil</button>
-                <div className="form-group" style={{ margin: 0 }}>
-                  <label>Tentatives en plus</label>
-                  <input type="number" min="0" max="10" value={form.tentatives_supplementaires} onChange={(e) => setForm({ ...form, tentatives_supplementaires: e.target.value })} style={{ width: '100px' }} />
+              ) : (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={proposer}>Proposer les étudiants sans soumission</button>
+                  {candidatsCharges && candidats.length === 0 && <span style={{ fontSize: '0.85rem', color: 'var(--gray-500)' }}>Tous les étudiants concernés ont soumis ce devoir.</span>}
                 </div>
-              </div>
+              )}
               {candidats.length > 0 && (
                 <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid var(--gray-200)', borderRadius: '6px', padding: '8px', marginTop: '8px' }}>
                   {candidats.map((c) => (
                     <label key={c.id} style={styleLigne}>
                       <input type="checkbox" style={{ width: 'auto' }} checked={form.etudiants.includes(c.id)} onChange={() => basculer('etudiants', c.id)} />
-                      {c.nom} ({c.meilleure_pourcentage == null ? 'rien soumis' : `${Number(c.meilleure_pourcentage)} %`})
+                      {t.tentatives ? `${c.nom} (${c.meilleure_pourcentage == null ? 'rien soumis' : `${Number(c.meilleure_pourcentage)} %`})` : c.nom}
                     </label>
                   ))}
                 </div>

@@ -9,7 +9,7 @@ const styleListe = { maxHeight: '180px', overflowY: 'auto', border: '1px solid v
 const styleLigne = { display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'normal', margin: '2px 0' };
 const styleVide = { fontSize: '0.85rem', color: 'var(--gray-500)' };
 
-export default function AffectationQuiz({ valeur, onChange, etudiantsConnus = [] }) {
+export default function AffectationQuiz({ valeur, onChange, etudiantsConnus = [], type = 'quiz' }) {
   const [classes, setClasses] = useState([]);
   const [groupes, setGroupes] = useState([]);
   const [recherche, setRecherche] = useState('');
@@ -50,7 +50,7 @@ export default function AffectationQuiz({ valeur, onChange, etudiantsConnus = []
     <div>
       <h3 style={{ margin: '0 0 8px' }}>Affectation</h3>
       <p style={{ ...styleVide, margin: '0 0 12px' }}>
-        Seuls les étudiants ciblés voient ce quiz. Cible actuelle : {resumeCibles(valeur.classes.length, valeur.groupes.length, valeur.etudiants.length)}.
+        Seuls les étudiants ciblés voient {type === 'devoir' ? 'ce devoir' : 'ce quiz'}. Cible actuelle : {resumeCibles(valeur.classes.length, valeur.groupes.length, valeur.etudiants.length)}.
       </p>
       {erreur && <div className="alert alert-error">{erreur}</div>}
       <div className="form-group">
