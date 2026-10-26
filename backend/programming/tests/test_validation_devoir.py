@@ -66,6 +66,28 @@ class ValidationDevoirTests(TestCase):
         self.assertEqual((res.data['statut_validation'], res.data['motif_refus']), ('refusee', 'Tests insuffisants'))
         self.assertTrue(AuditLog.objects.filter(action='refus_quiz', details__type='devoir').exists())
 
+    def test_courriel_de_validation(self):
+        devoir_id = self.creer().data['id']
+        self.action(devoir_id, 'soumettre_validation')
+        mail.outbox.clear()
+        self.action(devoir_id, 'valider', client=self.resp)
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, [self.a.ens.email])
+        self.assertEqual(message.subject, 'Devoir validé : Devoir à valider')
+        self.assertIn('est maintenant publié', message.body)
+
+    def test_courriel_de_refus(self):
+        devoir_id = self.creer().data['id']
+        self.action(devoir_id, 'soumettre_validation')
+        mail.outbox.clear()
+        self.action(devoir_id, 'refuser', client=self.resp, motif='Tests insuffisants')
+        self.assertEqual(len(mail.outbox), 1)
+        message = mail.outbox[0]
+        self.assertEqual(message.to, [self.a.ens.email])
+        self.assertEqual(message.subject, 'Devoir à revoir : Devoir à valider')
+        self.assertIn('Motif : Tests insuffisants', message.body)
+
     def test_gestion_publie_directement(self):
         res = self.creer(client=self.resp, est_publie=True)
         self.assertEqual(res.status_code, 201, res.data)
