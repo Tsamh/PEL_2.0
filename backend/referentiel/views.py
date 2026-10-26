@@ -404,7 +404,8 @@ class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return qs.filter(q_filiere_niveau_etudiant(user, prefix='ec__ue__'))
 
 
-class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class ClasseViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'annee_academique'
     queryset = Classe.objects.select_related('filiere', 'niveau', 'annee_academique').prefetch_related('groupes__membres').order_by('id')
     serializer_class = ClasseSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
@@ -435,7 +436,8 @@ class ClasseViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return super().perform_update(serializer, **kwargs)
 
 
-class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class GroupeViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'classe__annee_academique'
     queryset = Groupe.objects.select_related('classe', 'classe__filiere').prefetch_related('membres').order_by('id')
     serializer_class = GroupeSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
@@ -450,6 +452,7 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='membres')
     def ajouter_membres(self, request, pk=None):
         groupe = self.get_object()
+        self.verifier_ecriture(groupe)
         ids = request.data.get('etudiants') if isinstance(request.data, dict) else None
         if not isinstance(ids, list) or not ids:
             raise ValidationError({'etudiants': ["Indiquez au moins un étudiant."]})
@@ -474,6 +477,7 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['delete'], url_path=r'membres/(?P<etudiant_id>[0-9]+)')
     def retirer_membre(self, request, pk=None, etudiant_id=None):
         groupe = self.get_object()
+        self.verifier_ecriture(groupe)
         etudiant_id = int(etudiant_id)
         if not groupe.membres.filter(pk=etudiant_id).exists():
             raise NotFound("Cet étudiant n'est pas membre du groupe.")
@@ -483,7 +487,8 @@ class GroupeViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class InscriptionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class InscriptionViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'classe__annee_academique'
     queryset = Inscription.objects.select_related('etudiant', 'classe').order_by('id')
     serializer_class = InscriptionSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
@@ -517,7 +522,8 @@ class InscriptionViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         instance.delete()
 
 
-class EnseignantMatiereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class EnseignantMatiereViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'classe__annee_academique'
     queryset = EnseignantMatiere.objects.select_related('enseignant', 'ec', 'classe').order_by('id')
     serializer_class = EnseignantMatiereSerializer
     permission_classes = [RolePermission(read=CREATEURS, write=GESTION)]
@@ -558,7 +564,8 @@ def _identifiant(params, cle):
     return valeur if valeur is not None and 1 <= valeur <= 2 ** 63 - 1 else None
 
 
-class SemestreViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class SemestreViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'annee_academique'
     queryset = Semestre.objects.select_related('annee_academique').order_by('date_debut', 'id')
     serializer_class = SemestreSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
@@ -583,7 +590,8 @@ class SemestreViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
         return super().perform_update(serializer, **kwargs)
 
 
-class PeriodeEvaluationViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class PeriodeEvaluationViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'semestre__annee_academique'
     queryset = PeriodeEvaluation.objects.select_related('semestre', 'semestre__annee_academique').order_by('date_debut', 'id')
     serializer_class = PeriodeEvaluationSerializer
     permission_classes = [LECTURE_TOUS_ECRITURE_GESTION]
