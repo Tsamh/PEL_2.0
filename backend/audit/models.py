@@ -25,6 +25,7 @@ class AuditLog(models.Model):
         ('validation_reponse', 'Validation de réponse'),
         ('publication_resultats', 'Publication des résultats'),
         ('affectation_quiz', 'Affectation de quiz'),
+        ('affectation_evaluation', "Affectation d'évaluation"),
         ('code_acces_quiz', "Code d'accès de quiz"),
         ('echec_code_acces', "Essais de code d'accès épuisés"),
         ('membre_groupe', 'Ajout à un groupe'),

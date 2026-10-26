@@ -13,32 +13,41 @@ from accounts.permissions import (
     IsEtudiant, RolePermission, CREATEURS, TOUS_LES_ROLES, ENSEIGNANT, ETUDIANT,
 )
 from accounts.scoping import (
-    EtablissementScopedMixin, classes_du_perimetre, classes_enseignant, filieres_etudiant,
+    EtablissementScopedMixin, classes_du_perimetre, classes_enseignant,
     q_evaluation_etablissement, en_entier, verifier_filiere_du_perimetre, verifier_references_evaluation,
     MESSAGE_HORS_PERIMETRE,
 )
 from audit.services import log as audit_log
+from quiz import acces
 from quiz.views import etablissement_evaluation
 from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_archivee
 from .models import Devoir, SoumissionDevoir, NoteMatiere
-from .serializers import DevoirSerializer, DevoirSerializerPublic, SoumissionDevoirSerializer, SoumissionDevoirUpdateSerializer, NoteMatiereSerializer
+from .serializers import (
+    DevoirSerializer, DevoirEtudiantSerializer, SoumissionDevoirSerializer, SoumissionDevoirUpdateSerializer,
+    NoteMatiereSerializer,
+)
 
 CORRECTEURS = RolePermission(read=CREATEURS, write=CREATEURS)
 
 
 def devoirs_visibles_etudiant(user):
-    return Devoir.objects.filter(est_publie=True, filiere_id__in=filieres_etudiant(user))
+    """Devoirs publiés affectés à l'étudiant (classe, groupe de sa classe ou nominativement)."""
+    return Devoir.objects.filter(est_publie=True).filter(acces.q_affecte(Devoir, user))
 
 
 class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
     annee_path = 'annee_academique'
-    queryset = Devoir.objects.select_related('filiere', 'niveau', 'annee_academique', 'cree_par').all()
+    queryset = (
+        Devoir.objects.select_related('filiere__etablissement', 'niveau', 'annee_academique', 'cree_par__etablissement',
+                                      'valide_par', 'periode', 'ec')
+        .prefetch_related('classes', 'groupes__classe', 'etudiants', 'exercices__tests', 'exercices__competences')
+    )
     serializer_class = DevoirSerializer
     permission_classes = [RolePermission(read=TOUS_LES_ROLES, write=CREATEURS)]
 
     def get_serializer_class(self):
         if self.request.user.role == ETUDIANT:
-            return DevoirSerializerPublic
+            return DevoirEtudiantSerializer
         return DevoirSerializer
 
     def gestion_scope(self, qs, user):
@@ -56,6 +65,7 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
         instance = super().perform_create(serializer, cree_par=self.request.user, **kwargs)
         if instance.est_publie:
             self._journaliser('publication_evaluation', instance)
+        self._journaliser_affectation(acces.cibles_vides(), instance)
         return instance
 
     def perform_update(self, serializer, **kwargs):
@@ -63,9 +73,11 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
             verifier_filiere_du_perimetre(self.request.user, serializer.validated_data['filiere'])
         verifier_references_evaluation(self.request.user, serializer.validated_data)
         etait_publie = serializer.instance.est_publie
+        avant = acces.cibles(serializer.instance)
         instance = super().perform_update(serializer, **kwargs)
         if instance.est_publie and not etait_publie:
             self._journaliser('publication_evaluation', instance)
+        self._journaliser_affectation(avant, instance)
         return instance
 
     def perform_destroy(self, instance):
@@ -75,6 +87,12 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
     def _journaliser(self, action_audit, instance):
         audit_log(self.request, action_audit, cible=instance, etablissement=etablissement_evaluation(instance),
                   details={'type': 'devoir', 'titre': instance.titre})
+
+    def _journaliser_affectation(self, avant, instance):
+        details = acces.ecart_cibles(avant, acces.cibles(instance))
+        if details is not None:
+            audit_log(self.request, 'affectation_evaluation', cible=instance,
+                      etablissement=etablissement_evaluation(instance), details={**details, 'type': 'devoir'})
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
     def execute(self, request, pk=None):

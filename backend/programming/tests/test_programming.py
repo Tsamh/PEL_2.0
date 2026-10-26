@@ -1,10 +1,8 @@
-import json
-
 from django.test import TestCase
 
 from accounts.testing import build_world, client_for, make_user
 from audit.models import AuditLog
-from programming.models import Devoir, NoteMatiere, ReponseExercice, SoumissionDevoir
+from programming.models import CasDeTest, Devoir, NoteMatiere, ReponseExercice, SoumissionDevoir
 
 P = '/api/programming'
 
@@ -20,11 +18,17 @@ class DevoirsTests(TestCase):
 
     def test_etudiant_ne_recoit_ni_solution_ni_tests(self):
         a = self.w.a
+        CasDeTest.objects.create(exercice=a.exercice, ordre=2, entree='ENTREE_CACHEE', sortie_attendue='SORTIE_CACHEE')
         for url in (f'{P}/devoirs/', f'{P}/devoirs/{a.devoir.id}/'):
             with self.subTest(url=url):
-                contenu = json.dumps(client_for(a.etu).get(url).data)
+                res = client_for(a.etu).get(url)
+                self.assertEqual(res.status_code, 200)
+                contenu = res.content.decode('utf-8')
+                self.assertIn('Afficher 4', contenu)
                 self.assertNotIn('solution', contenu)
-                self.assertNotIn('test_cases', contenu)
+                self.assertNotIn('print(4)', contenu)
+                self.assertNotIn('ENTREE_CACHEE', contenu)
+                self.assertNotIn('SORTIE_CACHEE', contenu)
 
     def test_etudiant_limite_a_ses_filieres(self):
         a, b = self.w.a, self.w.b
