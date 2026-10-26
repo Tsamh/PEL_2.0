@@ -4,6 +4,7 @@ from rest_framework import viewsets
 from accounts.permissions import CREATEURS, RolePermission
 from accounts.scoping import EtablissementScopedMixin, en_entier, q_evaluation_etablissement
 from audit.services import log as audit_log
+from referentiel.archives import ArchiveMixin
 
 from .banque import ENTIER_MAX
 from .models import SessionQuiz
@@ -15,7 +16,8 @@ def _identifiant(params, cle):
     return valeur if valeur is not None and 1 <= valeur <= ENTIER_MAX else None
 
 
-class SessionQuizViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
+class SessionQuizViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+    annee_path = 'quiz__annee_academique'
     queryset = (
         SessionQuiz.objects.select_related('quiz', 'periode')
         .prefetch_related('classes', 'groupes__classe', 'etudiants').order_by('ouverture', 'id')
