@@ -329,6 +329,7 @@ class TentativeViewSet(viewsets.ReadOnlyModelViewSet):
 class ReponseViewSet(ArchiveMixin, EtablissementScopedMixin, mixins.ListModelMixin, viewsets.GenericViewSet):
     """Réponses courtes des tentatives soumises, pour la validation par l'enseignant."""
     annee_path = 'tentative__quiz__annee_academique'
+    parent_params = ('quiz',)
     queryset = (
         ReponseQuiz.objects
         .filter(question__type_question='courte', tentative__statut=TentativeQuiz.SOUMISE)

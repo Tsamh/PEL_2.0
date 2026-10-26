@@ -113,6 +113,20 @@ class ArchivageQuizTests(TestCase):
         self.assertEqual(client_for(self.a.admin).get(f'{Q}/suivi/evaluations/', {'archives': '1'}).data[0]['quiz'],
                          self.quiz.pk)
 
+    def test_absences_d_un_quiz_archive(self):
+        url = f'{Q}/suivi/absences/'
+        self.assertEqual(client_for(self.a.ens).get(url, {'quiz': self.quiz.pk, 'archives': '1'}).status_code, 200)
+        self.assertEqual(client_for(self.a.ens).get(url, {'quiz': self.quiz.pk}).status_code, 200)
+        self.assertEqual(client_for(self.w.b.admin).get(url, {'quiz': self.quiz.pk, 'archives': '1'}).status_code, 404)
+
+    def test_listes_filtrees_par_quiz_parent(self):
+        ens = client_for(self.a.ens)
+        self.assertIn(self.session.pk, ids(ens.get(f'{Q}/sessions-quiz/', {'quiz': self.quiz.pk})))
+        self.assertIn(self.reponse.pk, ids(ens.get(f'{Q}/reponses/', {'quiz': self.quiz.pk})))
+        self.assertEqual(ids(client_for(self.w.b.admin).get(f'{Q}/sessions-quiz/', {'quiz': self.quiz.pk})), [])
+        self.assertEqual(ids(ens.get(f'{Q}/reponses/')), [])
+        self.assertNotIn(self.session.pk, ids(ens.get(f'{Q}/sessions-quiz/')))
+
     def test_desarchivage_retablit_l_ecriture(self):
         AnneeAcademique.objects.filter(pk=self.a.annee.pk).update(archivee=False)
         res = client_for(self.a.ens).patch(f'{Q}/quizzes/{self.quiz.pk}/', {'titre': 'Rouvert'}, format='json')

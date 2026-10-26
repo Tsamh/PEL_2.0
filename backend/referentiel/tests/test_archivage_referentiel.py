@@ -6,6 +6,7 @@ from accounts.testing import build_world, client_for, make_user
 from referentiel.models import (
     AnneeAcademique, Classe, EnseignantMatiere, Groupe, Inscription, PeriodeEvaluation, Semestre,
 )
+from programming.models import NoteMatiere
 
 R = '/api/referentiel'
 
@@ -87,3 +88,34 @@ class ArchivageReferentielTests(TestCase):
             'date_fin': '2027-07-01'}, format='json'))
         self.assert_archive(self.admin.patch(f'{R}/periodes-evaluation/{self.periode.pk}/', {'libelle': 'CC9'},
                                              format='json'))
+
+
+class SuppressionCascadeTests(TestCase):
+    """Un DELETE du référentiel ne doit jamais emporter de données d'une année archivée."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+        a = cls.w.a
+        cls.note = NoteMatiere.objects.create(etudiant=a.etu, ec=a.ec, classe=a.classe, annee_academique=a.annee,
+                                              note_devoir=12)
+        AnneeAcademique.objects.filter(pk=a.annee.pk).update(archivee=True)
+
+    def setUp(self):
+        self.a = self.w.a
+        self.admin = client_for(self.a.admin)
+
+    def test_suppression_refusee(self):
+        for chemin, pk in (('filieres', self.a.filiere.pk), ('ues', self.a.ue.pk), ('ecs', self.a.ec.pk)):
+            with self.subTest(chemin=chemin):
+                res = self.admin.delete(f'{R}/{chemin}/{pk}/')
+                self.assertEqual(res.status_code, 409, getattr(res, 'data', None))
+                self.assertIn("année archivée", str(res.data['detail']))
+        self.assertTrue(Classe.objects.filter(pk=self.a.classe.pk).exists())
+        self.assertTrue(NoteMatiere.objects.filter(pk=self.note.pk).exists())
+
+    def test_suppression_sans_donnee_archivee(self):
+        b = self.w.b
+        self.assertEqual(client_for(b.admin).delete(f'{R}/ecs/{b.ec.pk}/').status_code, 204)
+        self.assertEqual(client_for(b.admin).delete(f'{R}/ues/{b.ue.pk}/').status_code, 204)
+        self.assertEqual(client_for(b.admin).delete(f'{R}/filieres/{b.filiere.pk}/').status_code, 204)

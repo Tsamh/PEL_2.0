@@ -18,6 +18,7 @@ def _identifiant(params, cle):
 
 class SessionQuizViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
     annee_path = 'quiz__annee_academique'
+    parent_params = ('quiz',)
     queryset = (
         SessionQuiz.objects.select_related('quiz', 'periode')
         .prefetch_related('classes', 'groupes__classe', 'etudiants').order_by('ouverture', 'id')

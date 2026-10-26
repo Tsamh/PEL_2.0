@@ -111,6 +111,7 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
 
 class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
     annee_path = 'devoir__annee_academique'
+    parent_params = ('devoir',)
     queryset = SoumissionDevoir.objects.select_related('devoir', 'etudiant').all()
     serializer_class = SoumissionDevoirSerializer
 
@@ -129,6 +130,11 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
 
     def etudiant_scope(self, qs, user):
         return qs.filter(etudiant=user)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        devoir = en_entier(self.request.query_params.get('devoir'))
+        return qs.filter(devoir_id=devoir) if devoir is not None else qs
 
     def get_serializer_class(self):
         if self.action in ('update', 'partial_update'):

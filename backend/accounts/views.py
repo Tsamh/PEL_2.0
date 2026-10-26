@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 
 from audit.services import log as audit_log
+from referentiel.archives import verifier_non_archivee
 from .permissions import (
     IsSuperAdmin, IsAdmin, IsGestionnaire, CanManageUser, MESSAGE_REFUS,
     peut_gerer_compte, SUPERADMIN, ADMIN, RESPONSABLE, ENSEIGNANT, ETUDIANT,
@@ -138,6 +139,7 @@ class UserViewSet(viewsets.ModelViewSet):
             classe = classes_du_perimetre(request.user).filter(id=data['classe']).first()
             if classe is None:
                 return Response({"error": "Classe introuvable dans votre établissement."}, status=status.HTTP_400_BAD_REQUEST)
+            verifier_non_archivee(classe.annee_academique)
 
         token = uuid.uuid4()
         username = data['email'].split('@')[0]
@@ -601,7 +603,7 @@ L'équipe PEL"""
             return Response({"error": "Le champ classes doit être une liste d'identifiants entiers."},
                             status=status.HTTP_400_BAD_REQUEST)
         from referentiel.models import AffectationEnseignant, EnseignantMatiere
-        perimetre = classes_du_perimetre(request.user)
+        perimetre = classes_du_perimetre(request.user).exclude(annee_academique__archivee=True)
         AffectationEnseignant.objects.filter(enseignant=user, classe__in=perimetre).delete()
         EnseignantMatiere.objects.filter(enseignant=user, classe__in=perimetre).delete()
         classes_affectees = self._affecter_classes(user, classes)
@@ -612,7 +614,8 @@ L'équipe PEL"""
         """Affecte l'enseignant aux classes du périmètre de l'appelant et à leurs EC. Renvoie les ids retenus."""
         from referentiel.models import AffectationEnseignant, EnseignantMatiere, EC
         retenues = []
-        for classe in classes_du_perimetre(self.request.user).filter(id__in=classes_ids):
+        for classe in classes_du_perimetre(self.request.user).filter(id__in=classes_ids).exclude(
+                annee_academique__archivee=True):
             AffectationEnseignant.objects.get_or_create(enseignant=enseignant, classe=classe)
             for ec_id in EC.objects.filter(ue__filiere=classe.filiere, ue__niveau=classe.niveau).values_list('id', flat=True):
                 EnseignantMatiere.objects.get_or_create(enseignant=enseignant, ec_id=ec_id, classe=classe)
@@ -732,14 +735,16 @@ L'équipe PEL"""
             stats['mes_quiz'] = Quiz.objects.filter(cree_par=user).count()
             stats['mes_devoirs'] = Devoir.objects.filter(cree_par=user).count()
             stats['soumissions_recues'] = SoumissionDevoir.objects.filter(devoir__cree_par=user).count()
-            stats['soumissions_a_corriger'] = SoumissionDevoir.objects.filter(devoir__cree_par=user, statut='soumis').count()
+            stats['soumissions_a_corriger'] = SoumissionDevoir.objects.filter(
+                devoir__cree_par=user, statut='soumis').exclude(devoir__annee_academique__archivee=True).count()
 
         elif user.role == 'etudiant':
             from programming.models import SoumissionDevoir
             from quiz.models import Quiz
 
             from quiz.acces import q_quiz_affecte
-            stats['quiz_disponibles'] = Quiz.objects.filter(est_publie=True).filter(q_quiz_affecte(user)).count()
+            stats['quiz_disponibles'] = Quiz.objects.filter(est_publie=True).filter(q_quiz_affecte(user)).exclude(
+                annee_academique__archivee=True).count()
             stats['mes_soumissions'] = SoumissionDevoir.objects.filter(etudiant=user).count()
             stats['soumissions_corrigees'] = SoumissionDevoir.objects.filter(etudiant=user, statut='corrige').count()
             if stats['mes_soumissions'] > 0:

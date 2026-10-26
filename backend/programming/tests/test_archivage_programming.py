@@ -35,6 +35,13 @@ class ArchivageProgrammingTests(TestCase):
         self.assertNotIn(self.note.pk, ids(etu.get(f'{P}/notes/mes_notes/')))
         self.assertIn(self.note.pk, ids(etu.get(f'{P}/notes/mes_notes/', {'archives': '1'})))
 
+    def test_soumissions_d_un_devoir_archive(self):
+        ens = client_for(self.a.ens)
+        self.assertIn(self.soumission.pk, ids(ens.get(f'{P}/soumissions/', {'devoir': self.a.devoir.pk})))
+        self.assertEqual(ids(client_for(self.w.b.ens).get(f'{P}/soumissions/', {'devoir': self.a.devoir.pk})), [])
+        self.assertEqual(ids(ens.get(f'{P}/soumissions/', {'devoir': 'x'})), [])
+        self.assertNotIn(self.soumission.pk, ids(ens.get(f'{P}/soumissions/')))
+
     def test_ecritures_refusees(self):
         ens, etu = client_for(self.a.ens), client_for(self.a.etu)
         cas = [

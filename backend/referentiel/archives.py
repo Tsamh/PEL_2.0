@@ -33,6 +33,12 @@ def verifier_non_archivee(annee):
         raise ConflitArchive(MESSAGE_ARCHIVEE.format(libelle=annee.libelle))
 
 
+def verifier_suppression(donnees_archivees, nom):
+    """Refuse la suppression d'un élément du référentiel dont la cascade emporterait des données archivées."""
+    if any(qs.exists() for qs in donnees_archivees):
+        raise ConflitArchive(f"Cette {nom} porte des données d'une année archivée : elle ne peut pas être supprimée.")
+
+
 def filtrer_archives(qs, chemin, params):
     """Sans `archives=1`, exclut les objets d'une année archivée ; avec, ne garde qu'eux."""
     champ = f'{chemin}__archivee' if chemin else 'archivee'
@@ -44,10 +50,15 @@ def filtrer_archives(qs, chemin, params):
 class ArchiveMixin:
     annee_path = ''
     actions_masquees = ('list',)
+    parent_params = ()  # paramètres désignant un parent (« quiz », « devoir ») : la liste n'est alors pas masquée
+
+    def _parent_designe(self):
+        params = self.request.query_params
+        return any(str(params.get(nom, '')).isdigit() for nom in self.parent_params)
 
     def get_queryset(self):
         qs = super().get_queryset()
-        if self.action in self.actions_masquees:
+        if self.action in self.actions_masquees and not self._parent_designe():
             qs = filtrer_archives(qs, self.annee_path, self.request.query_params)
         return qs
 
@@ -79,18 +90,22 @@ def archiver(annee, request):
     from quiz.models import TentativeQuiz
     from quiz.passage import cloturer_expirees
 
-    if annee.archivee:
-        raise ConflitArchive("Cette année académique est déjà archivée.")
-    if annee.date_fin >= timezone.localdate():
-        raise ConflitArchive("L'année académique n'est pas terminée : elle ne peut pas encore être archivée.")
-    tentatives = TentativeQuiz.objects.filter(quiz__annee_academique=annee)
-    cloturer_expirees(tentatives)
-    if tentatives.filter(statut=TentativeQuiz.EN_COURS).exists():
-        raise ConflitArchive("Des tentatives de quiz sont encore en cours pour cette année.")
-    annee.archivee, annee.archivee_le, annee.archivee_par, annee.est_active = True, timezone.now(), request.user, False
-    annee.save(update_fields=['archivee', 'archivee_le', 'archivee_par', 'est_active'])
-    audit_log(request, 'archivage_annee', cible=annee, etablissement=annee.etablissement,
-              details={'libelle': annee.libelle})
+    with transaction.atomic():
+        type(annee).objects.select_for_update().get(pk=annee.pk)
+        annee.refresh_from_db()
+        if annee.archivee:
+            raise ConflitArchive("Cette année académique est déjà archivée.")
+        if annee.date_fin >= timezone.localdate():
+            raise ConflitArchive("L'année académique n'est pas terminée : elle ne peut pas encore être archivée.")
+        tentatives = TentativeQuiz.objects.filter(quiz__annee_academique=annee)
+        cloturer_expirees(tentatives)
+        if tentatives.filter(statut=TentativeQuiz.EN_COURS).exists():
+            raise ConflitArchive("Des tentatives de quiz sont encore en cours pour cette année.")
+        annee.archivee, annee.archivee_le, annee.archivee_par, annee.est_active = (
+            True, timezone.now(), request.user, False)
+        annee.save(update_fields=['archivee', 'archivee_le', 'archivee_par', 'est_active'])
+        audit_log(request, 'archivage_annee', cible=annee, etablissement=annee.etablissement,
+                  details={'libelle': annee.libelle})
 
 
 def desarchiver(annee, request):

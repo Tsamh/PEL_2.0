@@ -304,6 +304,15 @@ class AnneeAcademiqueViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.Mo
         }, status=status.HTTP_201_CREATED)
 
 
+def _donnees_archivees_ec(**critere):
+    """Notes et affectations d'enseignants d'années archivées, emportées par la suppression d'une EC (ou de son UE)."""
+    from programming.models import NoteMatiere
+    return [
+        NoteMatiere.objects.filter(annee_academique__archivee=True, **critere),
+        EnseignantMatiere.objects.filter(classe__annee_academique__archivee=True, **critere),
+    ]
+
+
 class FiliereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = Filiere.objects.select_related('etablissement').order_by('id')
     serializer_class = FiliereSerializer
@@ -316,6 +325,18 @@ class FiliereViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def etudiant_scope(self, qs, user):
         return qs.filter(etablissement_id=user.etablissement_id)
+
+    def perform_destroy(self, instance):
+        from programming.models import Devoir, NoteMatiere
+        from quiz.models import Quiz
+        archivee = {'annee_academique__archivee': True}
+        archives.verifier_suppression([
+            Classe.objects.filter(filiere=instance, **archivee),
+            Quiz.objects.filter(filiere=instance, **archivee),
+            Devoir.objects.filter(filiere=instance, **archivee),
+            NoteMatiere.objects.filter(ec__ue__filiere=instance, **archivee),
+        ], 'filière')
+        super().perform_destroy(instance)
 
 
 class NiveauViewSet(viewsets.ModelViewSet):
@@ -362,6 +383,10 @@ class UEViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     def etudiant_scope(self, qs, user):
         return qs.filter(q_filiere_niveau_etudiant(user))
 
+    def perform_destroy(self, instance):
+        archives.verifier_suppression(_donnees_archivees_ec(ec__ue=instance), 'UE')
+        super().perform_destroy(instance)
+
 
 class ECViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
     queryset = EC.objects.select_related('ue').order_by('id')
@@ -385,6 +410,10 @@ class ECViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
 
     def etudiant_scope(self, qs, user):
         return qs.filter(q_filiere_niveau_etudiant(user, prefix='ue__'))
+
+    def perform_destroy(self, instance):
+        archives.verifier_suppression(_donnees_archivees_ec(ec=instance), 'EC')
+        super().perform_destroy(instance)
 
 
 class CoursViewSet(EtablissementScopedMixin, viewsets.ModelViewSet):
