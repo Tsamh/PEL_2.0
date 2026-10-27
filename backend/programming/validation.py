@@ -46,6 +46,8 @@ def contenu_exercice(data):
         'solution': lire('solution', []),
         'points': _decimal(lire('points', Decimal('1'))),
         'difficulte': lire('difficulte', 'moyen'),
+        'limite_temps_ms': lire('limite_temps_ms', 2000),
+        'limite_memoire_mo': lire('limite_memoire_mo', 256),
         'competences': sorted(_pk(c) for c in competences),
         'tests': [
             {'entree': t.get('entree', ''), 'sortie_attendue': t.get('sortie_attendue', ''),

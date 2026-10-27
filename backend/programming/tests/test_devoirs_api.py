@@ -409,8 +409,8 @@ class VisibiliteEtudiantTests(TestCase):
         self.assertEqual(exercice_['tests_publics'], [
             {'id': self.a.exercice.tests.get(public=True).id, 'entree': '', 'sortie_attendue': '4'}])
         self.assertEqual(set(exercice_), {'id', 'ordre', 'titre', 'enonce', 'contraintes', 'exemples',
-                                          'fichiers_initiaux', 'points', 'difficulte', 'competences',
-                                          'tests_publics'})
+                                          'fichiers_initiaux', 'points', 'difficulte', 'limite_temps_ms',
+                                          'limite_memoire_mo', 'competences', 'tests_publics'})
 
     def test_competences_en_libelles(self):
         self.devoir.classes.add(self.a.classe)

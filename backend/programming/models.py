@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.conf import settings
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 EXTENSIONS = {'python': 'py', 'javascript': 'js', 'c': 'c', 'cpp': 'cpp', 'java': 'java', 'autre': 'txt'}
@@ -42,6 +42,13 @@ class Devoir(models.Model):
     date_fin = models.DateTimeField(null=True, blank=True)
     est_publie = models.BooleanField(default=False)
     statut_validation = models.CharField(max_length=12, choices=STATUT_VALIDATION_CHOICES, default=BROUILLON)
+    APRES_VALIDATION = 'apres_validation'
+    IMMEDIATE = 'immediate'
+    POLITIQUE_CHOICES = [
+        (APRES_VALIDATION, "Après validation par l'enseignant"),
+        (IMMEDIATE, 'Immédiate'),
+    ]
+    politique_resultats = models.CharField(max_length=20, choices=POLITIQUE_CHOICES, default=APRES_VALIDATION)
     motif_refus = models.TextField(blank=True, default='')
     soumis_le = models.DateTimeField(null=True, blank=True)
     valide_par = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
@@ -97,6 +104,8 @@ class Exercice(models.Model):
     points = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('1'),
                                  validators=[MinValueValidator(Decimal('0.01'))])
     difficulte = models.CharField(max_length=10, choices=DIFFICULTE_CHOICES, default=MOYEN)
+    limite_temps_ms = models.PositiveIntegerField(default=2000, validators=[MinValueValidator(100), MaxValueValidator(10000)])
+    limite_memoire_mo = models.PositiveIntegerField(default=256, validators=[MinValueValidator(16), MaxValueValidator(512)])
     competences = models.ManyToManyField('quiz.TagQuestion', related_name='exercices', blank=True,
                                          limit_choices_to={'type': 'competence'})
 
@@ -159,14 +168,21 @@ class SessionDevoir(models.Model):
 
 
 class SoumissionDevoir(models.Model):
+    SOUMIS = 'soumis'
+    EN_CORRECTION = 'en_correction'
+    CORRIGEE_AUTO = 'corrigee_auto'
+    CORRIGE = 'corrige'
     STATUT_CHOICES = [
-        ('soumis', 'Soumis'),
-        ('corrige', 'Corrigé'),
+        (SOUMIS, 'Soumis'),
+        (EN_CORRECTION, 'En correction'),
+        (CORRIGEE_AUTO, 'Corrigé automatiquement'),
+        (CORRIGE, 'Corrigé'),
     ]
     devoir = models.ForeignKey(Devoir, on_delete=models.CASCADE, related_name='soumissions')
     etudiant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='soumissions_devoirs')
-    statut = models.CharField(max_length=20, choices=STATUT_CHOICES, default='soumis')
+    statut = models.CharField(max_length=20, choices=STATUT_CHOICES, default=SOUMIS)
     score = models.PositiveIntegerField(null=True, blank=True)
+    note_proposee = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     commentaire = models.TextField(blank=True)
     date_soumission = models.DateTimeField(auto_now_add=True)
 
@@ -195,6 +211,73 @@ class ReponseExercice(models.Model):
 
     def __str__(self):
         return f"{self.soumission} : {self.exercice}"
+
+
+class Execution(models.Model):
+    ESSAI_RUN = 'essai_run'
+    ESSAI_TEST = 'essai_test'
+    CORRECTION = 'correction'
+    TYPE_CHOICES = [(ESSAI_RUN, 'Essai (Run)'), (ESSAI_TEST, 'Essai (Test)'), (CORRECTION, 'Correction')]
+    EN_ATTENTE = 'en_attente'
+    EN_COURS = 'en_cours'
+    TERMINEE = 'terminee'
+    ERREUR = 'erreur'
+    STATUT_CHOICES = [(EN_ATTENTE, 'En attente'), (EN_COURS, 'En cours'), (TERMINEE, 'Terminée'), (ERREUR, 'Erreur')]
+
+    type = models.CharField(max_length=12, choices=TYPE_CHOICES)
+    demandeur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='executions')
+    devoir = models.ForeignKey(Devoir, on_delete=models.CASCADE, related_name='executions')
+    exercice = models.ForeignKey(Exercice, on_delete=models.CASCADE, related_name='executions')
+    reponse = models.ForeignKey(ReponseExercice, on_delete=models.CASCADE, null=True, blank=True,
+                                related_name='executions')
+    fichiers = models.JSONField(default=list, blank=True)
+    entree = models.TextField(blank=True, default='')
+    statut = models.CharField(max_length=10, choices=STATUT_CHOICES, default=EN_ATTENTE)
+    message = models.TextField(blank=True, default='')
+    compilation = models.TextField(blank=True, default='')
+    cree_le = models.DateTimeField(auto_now_add=True)
+    debut = models.DateTimeField(null=True, blank=True)
+    fin = models.DateTimeField(null=True, blank=True)
+    reprises = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "Exécution"
+        verbose_name_plural = "Exécutions"
+        ordering = ['cree_le', 'id']
+        indexes = [models.Index(fields=['statut', 'cree_le'])]
+
+    def __str__(self):
+        return f"{self.get_type_display()} {self.pk} ({self.statut})"
+
+
+class ResultatTest(models.Model):
+    OK = 'OK'
+    CE = 'CE'
+    RE = 'RE'
+    WA = 'WA'
+    TLE = 'TLE'
+    MLE = 'MLE'
+    SE = 'SE'
+    STATUT_CHOICES = [
+        (OK, 'Réussi'), (CE, 'Erreur de compilation'), (RE, "Erreur d'exécution"), (WA, 'Réponse fausse'),
+        (TLE, 'Temps dépassé'), (MLE, 'Mémoire dépassée'), (SE, 'Erreur du service'),
+    ]
+
+    execution = models.ForeignKey(Execution, on_delete=models.CASCADE, related_name='resultats')
+    cas = models.ForeignKey(CasDeTest, on_delete=models.CASCADE, null=True, blank=True, related_name='resultats')
+    ordre = models.PositiveIntegerField(default=0)
+    statut = models.CharField(max_length=3, choices=STATUT_CHOICES)
+    temps_ms = models.PositiveIntegerField(default=0)
+    sortie = models.TextField(blank=True, default='')
+    erreurs = models.TextField(blank=True, default='')
+
+    class Meta:
+        verbose_name = "Résultat de test"
+        verbose_name_plural = "Résultats de tests"
+        ordering = ['ordre', 'id']
+
+    def __str__(self):
+        return f"{self.execution_id} #{self.ordre} {self.statut}"
 
 
 class NoteMatiere(models.Model):

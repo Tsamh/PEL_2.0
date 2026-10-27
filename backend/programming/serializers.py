@@ -115,7 +115,8 @@ class ExerciceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exercice
         fields = ['id', 'ordre', 'titre', 'enonce', 'contraintes', 'exemples', 'fichiers_initiaux', 'solution',
-                  'points', 'difficulte', 'competences', 'competences_detail', 'tests']
+                  'points', 'difficulte', 'limite_temps_ms', 'limite_memoire_mo', 'competences', 'competences_detail',
+                  'tests']
         read_only_fields = ['id']
         extra_kwargs = {'enonce': {'trim_whitespace': False}, 'contraintes': {'trim_whitespace': False}}
 
@@ -300,7 +301,7 @@ class ExerciceEtudiantSerializer(serializers.ModelSerializer):
     class Meta:
         model = Exercice
         fields = ['id', 'ordre', 'titre', 'enonce', 'contraintes', 'exemples', 'fichiers_initiaux', 'points',
-                  'difficulte', 'competences', 'tests_publics']
+                  'difficulte', 'limite_temps_ms', 'limite_memoire_mo', 'competences', 'tests_publics']
         read_only_fields = fields
 
     def get_competences(self, exercice):

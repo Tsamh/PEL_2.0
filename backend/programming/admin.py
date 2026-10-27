@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import CasDeTest, Devoir, Exercice, NoteMatiere, ReponseExercice, SessionDevoir, SoumissionDevoir
+from .models import CasDeTest, Devoir, Exercice, Execution, NoteMatiere, ResultatTest, ReponseExercice, SessionDevoir, SoumissionDevoir
 
 
 class ExerciceInline(admin.StackedInline):
@@ -44,6 +44,18 @@ class SoumissionDevoirAdmin(admin.ModelAdmin):
     list_display = ('devoir', 'etudiant', 'statut', 'score', 'date_soumission')
     list_filter = ('statut',)
     inlines = [ReponseExerciceInline]
+
+
+class ResultatTestInline(admin.TabularInline):
+    model = ResultatTest
+    extra = 0
+
+
+@admin.register(Execution)
+class ExecutionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'type', 'statut', 'devoir', 'exercice', 'demandeur', 'cree_le', 'reprises')
+    list_filter = ('type', 'statut')
+    inlines = [ResultatTestInline]
 
 
 admin.site.register(CasDeTest)
