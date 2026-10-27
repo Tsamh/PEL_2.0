@@ -16,17 +16,6 @@ PAS_OUVERT = "Ce devoir n'est pas ouvert."
 FERME = "Ce devoir est fermé."
 
 
-def faux_run(self, code, language, test_cases=None):
-    """Exécuteur factice : chaque test échoue (sortie « 0 »), sans lancer de processus."""
-    return {
-        'success': True, 'output': '0\n', 'errors': '', 'execution_time': '0.00s',
-        'test_results': [
-            {'input': t['input'], 'expected': t['expected_output'], 'actual': '0', 'passed': False}
-            for t in (test_cases or [])
-        ],
-    }
-
-
 class Base(TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -73,8 +62,9 @@ class SoumissionTests(Base):
         self.assertEqual(res.data['bareme'], '25.50')
         self.assertEqual(res.data['reponses'][0], {
             'exercice': self.ex1.id, 'exercice_titre': 'Afficher 4',
-            'fichiers': [{'nom': 'main.py', 'contenu': 'print(4)\n'}],
+            'fichiers': [{'nom': 'main.py', 'contenu': 'print(4)\n'}], 'correction': None,
         })
+        self.assertEqual(res.data['statut'], 'en_correction')
         lu = self.etu.get(f'{P}/soumissions/{soumission.id}/')
         self.assertEqual(lu.status_code, 200)
         self.assertEqual(len(lu.data['reponses']), 2)
@@ -197,52 +187,6 @@ class RattrapageTests(Base):
         res = client_for(self.a.ens).patch(f'{P}/sessions-devoir/{res.data["id"]}/', {'libelle': 'Rattrapage'},
                                            format='json')
         self.assertEqual(res.status_code, 200, res.data)
-
-
-@mock.patch('programming.views.CodeRunner.run', faux_run)
-class ExecutionTests(Base):
-    def executer(self, client=None, **corps):
-        donnees = {'exercice': self.ex1.id, 'code': 'print(0)', **corps}
-        return (client or self.etu).post(f'{P}/devoirs/{self.a.devoir.id}/execute/', donnees, format='json')
-
-    def test_tests_publics_seulement(self):
-        res = self.executer()
-        self.assertEqual(res.status_code, 200, res.data)
-        self.assertEqual(len(res.data['test_results']), 1)
-        self.assertEqual(res.data['test_results'][0], {'passed': False, 'expected': '***', 'actual': '***'})
-        self.assertNotIn('CACHE', str(res.content))
-        ens = self.executer(client=client_for(self.a.ens))
-        self.assertEqual(ens.status_code, 200)
-        self.assertEqual([t['input'] for t in ens.data['test_results']], [''])
-        self.assertEqual(ens.data['test_results'][0]['expected'], '4')
-        res = self.executer(exercice=self.ex2.id)
-        self.assertEqual(len(res.data['test_results']), 1)
-
-    def test_exercice_invalide(self):
-        for valeur in (self.autre_ex.id, 'abc', None, 999999):
-            with self.subTest(exercice=valeur):
-                self.assertEqual(self.executer(exercice=valeur).status_code, 400)
-        self.assertEqual(self.executer(code='   ').status_code, 400)
-        self.assertEqual(self.executer(code=['x']).status_code, 400)
-
-    def test_fenetre_fermee_pour_l_etudiant(self):
-        self.dates(self.maintenant - timedelta(days=2), self.maintenant - timedelta(days=1))
-        res = self.executer()
-        self.assertEqual(res.status_code, 409)
-        self.assertEqual(str(res.data['detail']), FERME)
-        self.dates(self.maintenant + timedelta(days=1), self.maintenant + timedelta(days=2))
-        self.assertEqual(str(self.executer().data['detail']), PAS_OUVERT)
-        self.assertEqual(self.executer(client=client_for(self.a.ens)).status_code, 200)
-
-    def test_devoir_non_visible(self):
-        intrus = make_user('intrus', 'etudiant', self.a.etab)
-        self.assertEqual(self.executer(client=client_for(intrus)).status_code, 404)
-
-    def test_annee_archivee_pour_l_etudiant(self):
-        AnneeAcademique.objects.filter(pk=self.a.annee.pk).update(archivee=True)
-        res = self.executer()
-        self.assertEqual(res.status_code, 409)
-        self.assertIn('est archivée', str(res.data['detail']))
 
 
 class CorrectionTests(Base):

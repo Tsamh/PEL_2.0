@@ -1,8 +1,6 @@
 import math
-import subprocess
-import tempfile
-import os
-import time
+from decimal import Decimal, ROUND_HALF_UP
+
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -23,17 +21,25 @@ from quiz.exceptions import Conflit
 from quiz.statistiques import etudiants_affectes
 from quiz.views import etablissement_evaluation
 from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_archivee
-from .models import Devoir, ReponseExercice, SoumissionDevoir, NoteMatiere
+from .execution import file as file_execution
+from .execution.executeur import MESSAGE_LANGAGE
+from .models import Devoir, Execution, ReponseExercice, SoumissionDevoir, NoteMatiere
 from .serializers import (
-    DevoirSerializer, DevoirEtudiantSerializer, SoumissionDevoirSerializer, SoumissionDevoirUpdateSerializer,
+    DevoirSerializer, DevoirEtudiantSerializer, SoumissionDevoirSerializer, SoumissionDevoirEtudiantSerializer,
+    SoumissionDevoirUpdateSerializer,
     NoteMatiereSerializer, valider_reponses,
 )
 from .validation import PROFIL_DEVOIR
+from .views_execution import ACTIVES, demander_essai, langage_executable
 
 CORRECTEURS = RolePermission(read=CREATEURS, write=CREATEURS)
 MESSAGE_DEJA_SOUMIS = "Vous avez déjà soumis ce devoir."
 MESSAGE_PAS_OUVERT = "Ce devoir n'est pas ouvert."
 MESSAGE_FERME = "Ce devoir est fermé."
+MESSAGE_SANS_NOTE = "Aucune note proposée : indiquez un score."
+MESSAGE_DEJA_VALIDEE = "Cette soumission est déjà validée : sa correction ne peut plus être relancée."
+MESSAGE_CORRECTION_EN_FILE = "Une correction est déjà en cours pour cette soumission."
+MESSAGE_RIEN_A_RELANCER = "Aucune correction en erreur à relancer."
 
 
 def devoirs_visibles_etudiant(user):
@@ -148,49 +154,18 @@ class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSe
         return Response(sorted(candidats, key=lambda c: c['nom'].lower()))
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def execute(self, request, pk=None):
-        """Exécution provisoire (jusqu'à 4b) du code sur les seuls tests publics d'un exercice du devoir."""
+    def executer(self, request, pk=None):
+        """Essai asynchrone `{exercice, fichiers, mode: 'run'|'test', entree?}` -> 202 `{id, statut}`.
+
+        Ordre : devoir visible (404), année archivée (409), fenêtre de l'étudiant (409), 20 demandes par minute
+        (429), langage et corps (400), une exécution active par utilisateur (409).
+        """
         devoir = self.get_object()
+        self.verifier_ecriture(devoir)
         if request.user.role == ETUDIANT:
-            # Rien n'est écrit, mais l'étudiant n'exécute que pendant sa fenêtre, hors année archivée.
-            self.verifier_ecriture(devoir)
             verifier_fenetre_ouverte(devoir, request.user)
-        donnees = request.data if isinstance(request.data, dict) else {}
-        exercice_id = en_entier(donnees.get('exercice'))
-        exercice = devoir.exercices.filter(pk=exercice_id).first() if exercice_id is not None else None
-        if exercice is None:
-            raise ValidationError({'exercice': ["Exercice introuvable dans ce devoir."]})
-        code = donnees.get('code', '')
-        if not isinstance(code, str) or not code.strip():
-            return Response({"error": "Le code ne peut pas être vide"}, status=status.HTTP_400_BAD_REQUEST)
-
-        test_cases = [
-            {'input': t.entree, 'expected_output': t.sortie_attendue}
-            for t in exercice.tests.filter(public=True)
-        ]
-
-        runner = CodeRunner()
-        result = runner.run(code, devoir.langage, test_cases)
-
-        if request.user.role == ETUDIANT:
-            safe_result = {
-                "success": result["success"],
-                "output": result.get("output", ""),
-                "execution_time": result.get("execution_time", ""),
-                "test_results": [],
-            }
-            if result.get("test_results"):
-                for tr in result["test_results"]:
-                    safe_result["test_results"].append({
-                        "passed": tr["passed"],
-                        "expected": tr["expected"] if tr["passed"] else "***",
-                        "actual": tr["actual"] if tr["passed"] else "***",
-                    })
-            if not result["success"]:
-                safe_result["message"] = "Votre code contient des erreurs. Veuillez les corriger."
-            return Response(safe_result)
-
-        return Response(result)
+        execution = demander_essai(request.user, devoir, request.data)
+        return Response({'id': execution.id, 'statut': execution.statut}, status=status.HTTP_202_ACCEPTED)
 
 
 class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
@@ -205,7 +180,7 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
     def get_permissions(self):
         if self.action == 'create':
             return [IsEtudiant()]
-        if self.action in ('update', 'partial_update', 'destroy', 'corriger'):
+        if self.action in ('update', 'partial_update', 'destroy', 'corriger', 'recorriger'):
             return [CORRECTEURS()]
         return super().get_permissions()
 
@@ -226,6 +201,8 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
     def get_serializer_class(self):
         if self.action in ('update', 'partial_update'):
             return SoumissionDevoirUpdateSerializer
+        if self.request.user.role == ETUDIANT:
+            return SoumissionDevoirEtudiantSerializer
         return SoumissionDevoirSerializer
 
     def perform_destroy(self, instance):
@@ -241,7 +218,9 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
         """Soumission finale : `{devoir, reponses: [{exercice, fichiers: [{nom, contenu}]}]}`, une seule par devoir.
 
         Ordre des contrôles : devoir visible (400), année archivée (409), fenêtre (409), soumission existante
-        (409), réponses (400) ; la soumission et ses réponses sont créées ensemble, devoir verrouillé.
+        (409), réponses (400) ; la soumission et ses réponses sont créées ensemble, devoir verrouillé, avec leurs
+        corrections en file (soumission `en_correction`). Un langage que le service n'exécute pas (`autre`)
+        laisse la soumission `soumis`, pour une correction manuelle.
         """
         etudiant = request.user
         donnees = request.data if isinstance(request.data, dict) else {}
@@ -265,6 +244,9 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
                     ReponseExercice(soumission=soumission, exercice=exercice, fichiers=fichiers)
                     for exercice, fichiers in reponses
                 ])
+                if langage_executable(devoir):
+                    # Seule une soumission qui vient d'être créée est mise en correction ici.
+                    file_execution.corriger_soumission(soumission)
         except IntegrityError:
             # Deux envois simultanés : la contrainte d'unicité tranche, sans erreur 500.
             raise Conflit(MESSAGE_DEJA_SOUMIS)
@@ -283,15 +265,21 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
         commentaire = donnees.get('commentaire', '')
         if not isinstance(commentaire, str):
             raise ValidationError({'commentaire': "Le commentaire doit être un texte."})
+        # Score entier : au plus l'arrondi inférieur du barème du devoir.
+        maximum = math.floor(soumission.devoir.bareme)
         if score is not None:
             score = en_entier(score.strip() if isinstance(score, str) else score)
             if score is None:
                 raise ValidationError({'score': "Le score doit être un entier."})
-            # Score entier : au plus l'arrondi inférieur du barème du devoir.
-            maximum = math.floor(soumission.devoir.bareme)
             if not 0 <= score <= maximum:
                 raise ValidationError({'score': f"Le score doit être compris entre 0 et {maximum}."})
-            soumission.score = score
+        elif soumission.note_proposee is not None:
+            # Sans score : la note proposée, arrondie à l'entier le plus proche et bornée au barème.
+            arrondie = int(soumission.note_proposee.quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+            score = min(max(arrondie, 0), maximum)
+        else:
+            raise ValidationError({'score': MESSAGE_SANS_NOTE})
+        soumission.score = score
         soumission.commentaire = commentaire
         soumission.statut = 'corrige'
         soumission.save()
@@ -303,143 +291,43 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
             )
         return Response(SoumissionDevoirSerializer(soumission).data)
 
+    @action(detail=True, methods=['post'])
+    def recorriger(self, request, pk=None):
+        """Remet en file les corrections dont la dernière est en erreur (ou absente) ; toutes avec `{tout: true}`.
 
-class CodeRunner:
-    TIMEOUT = 10
-    MAX_MEMORY = 50 * 1024 * 1024
-
-    def run(self, code, language, test_cases=None):
-        start = time.time()
-
-        if language == 'python':
-            result = self._run_python(code)
-        elif language == 'javascript':
-            result = self._run_javascript(code)
-        else:
-            return {
-                "success": False,
-                "output": "",
-                "errors": f"Langage '{language}' non supporté pour l'exécution. Langages disponibles : Python, JavaScript.",
-                "execution_time": "0s",
-                "test_results": []
-            }
-
-        result["execution_time"] = f"{time.time() - start:.2f}s"
-
-        if test_cases:
-            result["test_results"] = self._run_tests(code, language, test_cases)
-
-        return result
-
-    def _run_python(self, code):
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
-                f.write(code)
-                f.flush()
-                tmp_path = f.name
-
-            proc = subprocess.run(
-                ['python3', tmp_path],
-                capture_output=True, text=True,
-                timeout=self.TIMEOUT
-            )
-            return {
-                "success": proc.returncode == 0,
-                "output": proc.stdout,
-                "errors": proc.stderr if proc.returncode != 0 else "",
-            }
-        except subprocess.TimeoutExpired:
-            return {"success": False, "output": "", "errors": f"Timeout ({self.TIMEOUT}s dépassé)"}
-        except Exception as e:
-            return {"success": False, "output": "", "errors": str(e)}
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-
-    def _run_javascript(self, code):
-        try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False, encoding='utf-8') as f:
-                f.write(code)
-                f.flush()
-                tmp_path = f.name
-
-            proc = subprocess.run(
-                ['node', tmp_path],
-                capture_output=True, text=True,
-                timeout=self.TIMEOUT
-            )
-            return {
-                "success": proc.returncode == 0,
-                "output": proc.stdout,
-                "errors": proc.stderr if proc.returncode != 0 else "",
-            }
-        except FileNotFoundError:
-            return {"success": False, "output": "", "errors": "Node.js n'est pas installé sur le serveur."}
-        except subprocess.TimeoutExpired:
-            return {"success": False, "output": "", "errors": f"Timeout ({self.TIMEOUT}s dépassé)"}
-        except Exception as e:
-            return {"success": False, "output": "", "errors": str(e)}
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-
-    def _run_tests(self, code, language, test_cases):
-        results = []
-        for i, tc in enumerate(test_cases):
-            input_data = tc.get('input', '')
-            expected = tc.get('expected_output', '')
-
-            full_code = code + "\n" + self._get_test_harness(language, input_data)
-
-            if language == 'python':
-                result = self._run_python(full_code)
-            elif language == 'javascript':
-                result = self._run_javascript(full_code)
-            else:
-                result = {"output": "", "errors": "Langage non supporté"}
-
-            actual = result.get('output', '').strip()
-            passed = actual == expected.strip()
-
-            results.append({
-                "input": input_data,
-                "expected": expected,
-                "actual": actual,
-                "passed": passed
-            })
-        return results
-
-    def _get_test_harness(self, language, input_data):
-        if language == 'python':
-            return f"""
-import sys
-from io import StringIO
-_old_stdin = sys.stdin
-sys.stdin = StringIO({input_data!r})
-try:
-    main()
-except NameError:
-    pass
-sys.stdin = _old_stdin
-"""
-        elif language == 'javascript':
-            return f"""
-try {{
-  if (typeof main === 'function') {{
-    const stdin = {input_data!r};
-    const _origLog = console.log;
-    let output = '';
-    console.log = (v) => {{ output += v + '\\n'; }};
-    main();
-    console.log = _origLog;
-  }}
-}} catch(e) {{ console.error(e.message); }}
-"""
-        return ""
+        409 : année archivée, langage non exécutable, soumission déjà validée, correction déjà en file, rien à relancer.
+        """
+        from .execution.notation import derniere_correction
+        soumission = self.get_object()
+        self.verifier_ecriture(soumission)
+        donnees = request.data if request.data is not None else {}
+        if not isinstance(donnees, dict):
+            raise ValidationError("Le corps de la requête doit être un objet JSON.")
+        tout = donnees.get('tout', False)
+        if not isinstance(tout, bool):
+            raise ValidationError({'tout': "Le champ tout doit être un booléen."})
+        if not langage_executable(soumission.devoir):
+            raise Conflit(MESSAGE_LANGAGE)
+        with transaction.atomic():
+            soumission = SoumissionDevoir.objects.select_for_update().select_related('devoir').get(pk=soumission.pk)
+            if soumission.statut == SoumissionDevoir.CORRIGE:
+                raise Conflit(MESSAGE_DEJA_VALIDEE)
+            if Execution.objects.filter(reponse__soumission=soumission, type=Execution.CORRECTION,
+                                        statut__in=ACTIVES).exists():
+                raise Conflit(MESSAGE_CORRECTION_EN_FILE)
+            reponses = list(soumission.reponses.select_related('exercice'))
+            if not tout:
+                reponses = [r for r in reponses
+                            if (derniere := derniere_correction(r)) is None or derniere.statut == Execution.ERREUR]
+            if not reponses:
+                raise Conflit(MESSAGE_RIEN_A_RELANCER)
+            soumission.statut = SoumissionDevoir.EN_CORRECTION
+            soumission.save(update_fields=['statut'])
+            for reponse in reponses:
+                file_execution.mettre_en_file(Execution.CORRECTION, soumission.etudiant, soumission.devoir,
+                                              reponse.exercice, reponse=reponse)
+        soumission = self.get_queryset().get(pk=soumission.pk)
+        return Response(SoumissionDevoirSerializer(soumission).data, status=status.HTTP_202_ACCEPTED)
 
 
 def ec_autorisee_pour_classe(user, classe, ec_id):

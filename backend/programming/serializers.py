@@ -1,3 +1,4 @@
+import re
 from urllib.parse import urlsplit
 
 from django.db import transaction
@@ -8,6 +9,8 @@ from quiz import fenetres, validation
 from quiz.acces import CLES_CIBLES, verifier_cibles
 from quiz.exceptions import Conflit
 from quiz.models import TagQuestion
+from .execution import BUDGET_TESTS_MS
+from .execution.langages import nom_refuse
 from .models import CasDeTest, Devoir, Exercice, SoumissionDevoir, NoteMatiere
 from .validation import PROFIL_DEVOIR, exercices_modifies
 
@@ -21,6 +24,13 @@ FICHIERS_MAX = 20
 NOM_FICHIER_MAX = 100
 CONTENU_FICHIER_MAX = 100000
 EXEMPLES_MAX = 20
+LIMITE_TEMPS_DEFAUT_MS = 2000
+# Un champ texte PostgreSQL refuse le caractère NUL ; un demi-codet isolé ne s'encode pas en UTF-8.
+NON_STOCKABLES = re.compile('[\x00\ud800-\udfff]')
+
+
+def contient_non_stockable(texte):
+    return isinstance(texte, str) and NON_STOCKABLES.search(texte) is not None
 
 
 def _texte(valeur, defaut=''):
@@ -63,15 +73,19 @@ def valider_fichiers(valeur):
             raise serializers.ValidationError(erreur)
         nom, contenu = _texte(fichier.get('nom')), _texte(fichier.get('contenu'))
         nom = nom.strip() if nom is not None else ''
-        if not nom or len(nom) > NOM_FICHIER_MAX or '/' in nom or '\\' in nom or '..' in nom:
+        # Même règle que le service d'exécution : un nom simple, valable sous Linux comme sous Windows.
+        if len(nom) > NOM_FICHIER_MAX or nom_refuse(nom):
             raise serializers.ValidationError(
-                f"Un nom de fichier compte de 1 à {NOM_FICHIER_MAX} caractères, sans « / », « \\ » ni « .. ».")
+                f"Un nom de fichier compte de 1 à {NOM_FICHIER_MAX} caractères, sans chemin (« / », « \\ »), "
+                "caractère spécial ni point final, et n'est pas un nom réservé (CON, NUL, COM1...).")
         if contenu is None or len(contenu) > CONTENU_FICHIER_MAX:
             raise serializers.ValidationError(
                 f"Le contenu du fichier {nom} doit être un texte d'au plus {CONTENU_FICHIER_MAX} caractères.")
-        if nom in noms:
+        if contient_non_stockable(contenu):
+            raise serializers.ValidationError(f"Le contenu du fichier {nom} contient un caractère non autorisé (NUL).")
+        if nom.casefold() in noms:
             raise serializers.ValidationError(f"Deux fichiers portent le nom {nom}.")
-        noms.add(nom)
+        noms.add(nom.casefold())
         fichiers.append({'nom': nom, 'contenu': contenu})
     return fichiers
 
@@ -136,6 +150,16 @@ class ExerciceSerializer(serializers.ModelSerializer):
         if len(valeur) > TESTS_MAX:
             raise serializers.ValidationError(f"Un exercice compte au plus {TESTS_MAX} tests.")
         return valeur
+
+    def validate(self, attrs):
+        # Borne du service d'exécution : une correction exécute tous les tests dans un budget global.
+        limite = attrs.get('limite_temps_ms', LIMITE_TEMPS_DEFAUT_MS)
+        nombre = len(attrs.get('tests') or [])
+        if nombre * limite > BUDGET_TESTS_MS:
+            raise serializers.ValidationError({'tests': [
+                f"Le nombre de tests multiplié par la limite de temps ne doit pas dépasser {BUDGET_TESTS_MS} ms "
+                f"({BUDGET_TESTS_MS // 1000} s) : ici {nombre} tests de {limite} ms."]})
+        return attrs
 
 
 def _creer_exercices(devoir, exercices_data):
@@ -375,20 +399,118 @@ def valider_reponses(devoir, valeur):
     return reponses
 
 
+def resultat_complet(resultat, execution):
+    """Résultat d'un test vu par un correcteur (ou par le demandeur d'un essai qui n'est pas étudiant) : tout."""
+    cas = resultat.cas
+    return {
+        'ordre': resultat.ordre, 'cas': resultat.cas_id, 'public': cas.public if cas is not None else None,
+        'statut': resultat.statut, 'temps_ms': resultat.temps_ms,
+        'entree': cas.entree if cas is not None else execution.entree,
+        'sortie_attendue': cas.sortie_attendue if cas is not None else None,
+        'sortie': resultat.sortie, 'erreurs': resultat.erreurs,
+    }
+
+
+def resultat_etudiant(resultat):
+    """Résultat d'un test vu par l'étudiant : jamais l'entrée ni la sortie attendue d'un test caché."""
+    cas = resultat.cas
+    if cas is None:  # essai libre (Run) : sa propre entrée
+        return {'statut': resultat.statut, 'temps_ms': resultat.temps_ms, 'sortie': resultat.sortie,
+                'erreurs': resultat.erreurs}
+    if cas.public:
+        return {'statut': resultat.statut, 'temps_ms': resultat.temps_ms, 'entree': cas.entree,
+                'sortie_attendue': cas.sortie_attendue, 'sortie': resultat.sortie}
+    return {'statut': resultat.statut, 'temps_ms': resultat.temps_ms}
+
+
+def execution_donnees(execution, complet):
+    """`{id, type, statut, message, compilation, resultats}` ; `complet` : vue correcteur."""
+    resultats = execution.resultats.select_related('cas').order_by('ordre', 'id')
+    return {
+        'id': execution.id, 'type': execution.type, 'statut': execution.statut, 'message': execution.message,
+        'compilation': execution.compilation,
+        'resultats': [resultat_complet(r, execution) if complet else resultat_etudiant(r) for r in resultats],
+    }
+
+
+def resultats_visibles_etudiant(soumission):
+    """Politique de résultats : après validation (`corrige`), ou dès la correction automatique si `immediate`."""
+    if soumission.statut == SoumissionDevoir.CORRIGE:
+        return True
+    return (soumission.devoir.politique_resultats == Devoir.IMMEDIATE
+            and soumission.statut == SoumissionDevoir.CORRIGEE_AUTO)
+
+
 class SoumissionDevoirSerializer(serializers.ModelSerializer):
+    """Vue correcteur : réponses avec la dernière correction de chaque exercice et ses résultats complets."""
     etudiant_nom = serializers.CharField(source='etudiant.get_full_name', read_only=True)
     devoir_titre = serializers.CharField(source='devoir.titre', read_only=True)
     bareme = serializers.DecimalField(source='devoir.bareme', max_digits=12, decimal_places=2, read_only=True)
+    politique_resultats = serializers.CharField(source='devoir.politique_resultats', read_only=True)
     reponses = serializers.SerializerMethodField()
 
     class Meta:
         model = SoumissionDevoir
-        fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'score', 'commentaire',
-                  'date_soumission', 'bareme', 'reponses']
-        read_only_fields = ['id', 'etudiant', 'statut', 'score', 'commentaire', 'date_soumission']
+        fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'score', 'note_proposee',
+                  'commentaire', 'date_soumission', 'bareme', 'politique_resultats', 'reponses']
+        read_only_fields = ['id', 'etudiant', 'statut', 'score', 'note_proposee', 'commentaire', 'date_soumission']
+
+    def correction(self, reponse):
+        from .execution.notation import derniere_correction
+        derniere = derniere_correction(reponse)
+        return execution_donnees(derniere, complet=True) if derniere is not None else None
 
     def get_reponses(self, soumission):
-        return [{'exercice': r.exercice_id, 'exercice_titre': r.exercice.titre, 'fichiers': r.fichiers}
+        return [{'exercice': r.exercice_id, 'exercice_titre': r.exercice.titre, 'fichiers': r.fichiers,
+                 'correction': self.correction(r)}
+                for r in soumission.reponses.all()]
+
+
+class SoumissionDevoirEtudiantSerializer(serializers.ModelSerializer):
+    """Vue étudiant : statut de correction toujours ; note et résultats (tests cachés réduits au statut) seulement
+    si la politique du devoir le permet (voir `resultats_visibles_etudiant`)."""
+    etudiant_nom = serializers.CharField(source='etudiant.get_full_name', read_only=True)
+    devoir_titre = serializers.CharField(source='devoir.titre', read_only=True)
+    bareme = serializers.DecimalField(source='devoir.bareme', max_digits=12, decimal_places=2, read_only=True)
+    politique_resultats = serializers.CharField(source='devoir.politique_resultats', read_only=True)
+    resultats_visibles = serializers.SerializerMethodField()
+    score = serializers.SerializerMethodField()
+    note_proposee = serializers.SerializerMethodField()
+    commentaire = serializers.SerializerMethodField()
+    reponses = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SoumissionDevoir
+        fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'resultats_visibles',
+                  'score', 'note_proposee', 'commentaire', 'date_soumission', 'bareme', 'politique_resultats',
+                  'reponses']
+        read_only_fields = fields
+
+    def get_resultats_visibles(self, soumission):
+        return resultats_visibles_etudiant(soumission)
+
+    def get_score(self, soumission):
+        return soumission.score if soumission.statut == SoumissionDevoir.CORRIGE else None
+
+    def get_note_proposee(self, soumission):
+        if not resultats_visibles_etudiant(soumission) or soumission.note_proposee is None:
+            return None
+        return str(soumission.note_proposee)
+
+    def get_commentaire(self, soumission):
+        return soumission.commentaire if soumission.statut == SoumissionDevoir.CORRIGE else ''
+
+    def correction(self, reponse, visible):
+        from .execution.notation import derniere_correction
+        if not visible:
+            return None
+        derniere = derniere_correction(reponse)
+        return execution_donnees(derniere, complet=False) if derniere is not None else None
+
+    def get_reponses(self, soumission):
+        visible = resultats_visibles_etudiant(soumission)
+        return [{'exercice': r.exercice_id, 'exercice_titre': r.exercice.titre, 'fichiers': r.fichiers,
+                 'correction': self.correction(r, visible)}
                 for r in soumission.reponses.all()]
 
 
