@@ -1,10 +1,12 @@
 """File d'exécution, worker et notation (sous-projet 4b, tâche 3). Exécuteur factice : pas de Docker."""
 from datetime import timedelta
 from decimal import Decimal
+import threading
 from io import StringIO
 from unittest import mock
 
 from django.core.management import call_command
+from django.db import OperationalError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -320,3 +322,114 @@ class CorrectionTests(Base):
         self.assertEqual(fichier.corriger_soumission(soumission), [])
         soumission.refresh_from_db()
         self.assertEqual((soumission.statut, soumission.note_proposee), (SoumissionDevoir.CORRIGEE_AUTO, 0))
+
+
+@override_settings(PEL_EXECUTEUR='factice')
+class JetonDeReclamationTests(Base):
+    def prete(self):
+        exo = self.exercice(tests=[('a', 'a', False, 1)])
+        return self.en_file(exo, entree='a')
+
+    def reprendre_et_reclamer(self, e):
+        Execution.objects.filter(pk=e.pk).update(
+            debut=timezone.now() - timedelta(seconds=fichier.SEUIL_REPRISE_S + 5))
+        fichier.recuperer_bloquees()
+        return fichier.reclamer()
+
+    def test_ancien_worker_ecarte_apres_reclamation_par_un_autre(self):
+        self.prete()
+        premier = fichier.reclamer()
+        second = self.reprendre_et_reclamer(premier)
+        self.assertEqual(second.pk, premier.pk)
+        from programming.execution.executeur import executer
+        # Le second termine d'abord, puis le premier (périmé) tente d'écrire.
+        self.assertTrue(executer(second))
+        avant = list(second.resultats.values_list('pk', 'statut'))
+        self.assertFalse(executer(premier))
+        e = Execution.objects.get(pk=premier.pk)
+        self.assertEqual(e.statut, Execution.TERMINEE)
+        self.assertEqual(list(e.resultats.values_list('pk', 'statut')), avant)
+
+    def test_ancien_worker_n_ecrase_pas_une_execution_en_cours_chez_un_autre(self):
+        self.prete()
+        premier = fichier.reclamer()
+        second = self.reprendre_et_reclamer(premier)
+        from programming.execution.executeur import executer
+        self.assertFalse(executer(premier))
+        e = Execution.objects.get(pk=premier.pk)
+        self.assertEqual((e.statut, e.fin), (Execution.EN_COURS, None))
+        self.assertEqual(e.resultats.count(), 0)
+        self.assertEqual(e.debut, second.debut)
+
+    def test_abandonnee_reste_en_erreur(self):
+        self.prete()
+        e = fichier.reclamer()
+        Execution.objects.filter(pk=e.pk).update(
+            reprises=fichier.MAX_REPRISES, debut=timezone.now() - timedelta(seconds=fichier.SEUIL_REPRISE_S + 5))
+        e.debut = Execution.objects.get(pk=e.pk).debut
+        fichier.recuperer_bloquees()
+        from programming.execution.executeur import executer
+        self.assertFalse(executer(e))
+        fichier.traiter(e)
+        e2 = Execution.objects.get(pk=e.pk)
+        self.assertEqual(e2.statut, Execution.ERREUR)
+        self.assertEqual(e2.resultats.count(), 0)
+
+    def test_ancien_worker_ne_note_pas_la_soumission(self):
+        soumission = SoumissionDevoir.objects.create(devoir=self.devoir, etudiant=self.etu)
+        exo = self.exercice(tests=[('a', 'a', False, 1)])
+        ReponseExercice.objects.create(soumission=soumission, exercice=exo, fichiers=fic())
+        fichier.corriger_soumission(soumission)
+        premier = fichier.reclamer()
+        self.reprendre_et_reclamer(premier)  # remise en file puis réclamée par un autre
+        fichier.traiter(premier)
+        soumission.refresh_from_db()
+        self.assertEqual(soumission.statut, SoumissionDevoir.EN_CORRECTION)
+        self.assertIsNone(soumission.note_proposee)
+
+    def test_erreur_de_l_executeur_perimee_n_ecrase_rien(self):
+        self.prete()
+        premier = fichier.reclamer()
+        self.reprendre_et_reclamer(premier)
+        with mock.patch('programming.execution.executeur.executer', side_effect=RuntimeError('x')):
+            fichier.traiter(premier)
+        self.assertEqual(Execution.objects.get(pk=premier.pk).statut, Execution.EN_COURS)
+
+
+@override_settings(PEL_EXECUTEUR='factice')
+class ResilienceTests(Base):
+    def commande(self):
+        from programming.management.commands.executer_file import Command
+        return Command()
+
+    def test_reprise_survit_a_une_coupure_de_la_base(self):
+        arret = threading.Event()
+        appels = []
+
+        def recuperer(*a, **k):
+            appels.append(1)
+            if len(appels) == 1:
+                raise OperationalError('connexion perdue')
+            arret.set()
+            return (0, 0)
+
+        with mock.patch.object(fichier, 'recuperer_bloquees', side_effect=recuperer),                 mock.patch('programming.management.commands.executer_file.close_old_connections') as renouvelle:
+            self.commande()._boucle_principale(arret, periode=0)
+        self.assertEqual(len(appels), 2)
+        self.assertGreaterEqual(renouvelle.call_count, 2)
+
+    def test_fil_continue_apres_une_coupure(self):
+        arret = threading.Event()
+        appels = []
+
+        def reclamer():
+            appels.append(1)
+            if len(appels) == 1:
+                raise OperationalError('connexion perdue')
+            arret.set()
+            return None
+
+        with mock.patch.object(fichier, 'reclamer', side_effect=reclamer),                 mock.patch('programming.management.commands.executer_file.close_old_connections') as renouvelle,                 mock.patch('programming.management.commands.executer_file.connection'):
+            self.commande()._fil(arret, 0)
+        self.assertEqual(len(appels), 2)
+        self.assertGreaterEqual(renouvelle.call_count, 2)

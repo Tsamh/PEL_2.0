@@ -777,7 +777,8 @@ class ExecuterTests(TestCase):
 
     def test_fichier_principal_absent(self):
         e = Execution.objects.create(type=Execution.ESSAI_TEST, demandeur=self.w.a.etu, devoir=self.devoir,
-                                     exercice=self.exo, fichiers=[{'nom': 'autre.py', 'contenu': ''}])
+                                     exercice=self.exo, fichiers=[{'nom': 'autre.py', 'contenu': ''}],
+                                     statut=Execution.EN_COURS)
         executer(e)
         e.refresh_from_db()
         self.assertEqual(e.statut, Execution.TERMINEE)
@@ -786,7 +787,7 @@ class ExecuterTests(TestCase):
 
     def test_nom_de_fichier_invalide(self):
         e = Execution.objects.create(type=Execution.ESSAI_TEST, demandeur=self.w.a.etu, devoir=self.devoir,
-                                     exercice=self.exo,
+                                     exercice=self.exo, statut=Execution.EN_COURS,
                                      fichiers=[{'nom': 'main.py', 'contenu': ''}, {'nom': '../x', 'contenu': ''}])
         executer(e)
         e.refresh_from_db()

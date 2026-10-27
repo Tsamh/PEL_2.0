@@ -2,7 +2,7 @@
 import logging
 from datetime import timedelta
 
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from . import MESSAGE_INDISPONIBLE
@@ -31,13 +31,22 @@ def reclamer():
     réclamation gagne, sur SQLite comme sur PostgreSQL. Renvoie l'exécution ou None.
     """
     from programming.models import Execution
+    en_attente = Execution.objects.filter(statut=Execution.EN_ATTENTE).order_by('cree_le', 'id')
     while True:
-        candidat = (Execution.objects.filter(statut=Execution.EN_ATTENTE).order_by('cree_le', 'id')
-                    .values_list('pk', flat=True).first())
+        if connection.features.has_select_for_update_skip_locked:
+            # PostgreSQL : les candidats déjà verrouillés par un autre worker sont ignorés, sans file d'attente.
+            with transaction.atomic():
+                candidat = en_attente.select_for_update(skip_locked=True).values_list('pk', flat=True).first()
+                pris = candidat is not None and Execution.objects.filter(
+                    pk=candidat, statut=Execution.EN_ATTENTE).update(
+                    statut=Execution.EN_COURS, debut=timezone.now(), fin=None)
+        else:
+            candidat = en_attente.values_list('pk', flat=True).first()
+            pris = candidat is not None and Execution.objects.filter(
+                pk=candidat, statut=Execution.EN_ATTENTE).update(
+                statut=Execution.EN_COURS, debut=timezone.now(), fin=None)
         if candidat is None:
             return None
-        pris = Execution.objects.filter(pk=candidat, statut=Execution.EN_ATTENTE).update(
-            statut=Execution.EN_COURS, debut=timezone.now(), fin=None)
         if pris:
             return Execution.objects.select_related('devoir', 'exercice', 'reponse').get(pk=candidat)
 
@@ -111,21 +120,26 @@ def apres_correction(execution):
 
 
 def traiter(execution):
-    """Exécute une exécution réclamée puis met à jour la soumission ; n'échoue jamais."""
+    """Exécute une exécution réclamée puis met à jour la soumission ; n'échoue jamais.
+
+    `execution.debut`, posé par `reclamer`, est le jeton de réclamation : si l'exécution a été reprise ou
+    abandonnée entre-temps, rien n'est écrit et la soumission n'est pas notée.
+    """
     from programming.models import Execution
     from .executeur import executer
     try:
-        executer(execution)
+        ecrit = executer(execution)
     except Exception:  # noqa: BLE001 : une exécution défaillante ne doit pas arrêter le worker
         logger.exception("Échec de l'exécution %s", execution.pk)
         try:
-            Execution.objects.filter(pk=execution.pk, statut=Execution.EN_COURS).update(
+            Execution.objects.filter(pk=execution.pk, statut=Execution.EN_COURS, debut=execution.debut).update(
                 statut=Execution.ERREUR, message=MESSAGE_INDISPONIBLE, fin=timezone.now())
         except Exception:  # noqa: BLE001 : la reprise des exécutions bloquées s'en chargera
             logger.exception("Impossible d'enregistrer l'erreur de l'exécution %s", execution.pk)
         return
+    if not ecrit:
+        return
     try:
-        execution.refresh_from_db()
         apres_correction(execution)
     except Exception:  # noqa: BLE001
         logger.exception("Mise à jour de la soumission impossible après l'exécution %s", execution.pk)

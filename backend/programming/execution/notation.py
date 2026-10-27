@@ -11,12 +11,13 @@ def note_exercice(exercice, resultats):
     tests publics ne servent que si l'exercice n'a aucun test caché. Sans test : 0. Un test sans résultat
     compte comme échoué. `resultats` : les `ResultatTest` d'une correction de l'exercice.
     """
+    from programming.models import ResultatTest
     tests = list(exercice.tests.all())
     retenus = [t for t in tests if not t.public] or tests
     total = sum(t.poids for t in retenus)
     if not total:
         return Decimal('0')
-    reussis = {r.cas_id for r in resultats if r.statut == 'OK' and r.cas_id is not None}
+    reussis = {r.cas_id for r in resultats if r.statut == ResultatTest.OK and r.cas_id is not None}
     obtenu = sum(t.poids for t in retenus if t.id in reussis)
     return (Decimal(obtenu) / Decimal(total) * exercice.points).quantize(CENTIEMES, rounding=ROUND_HALF_UP)
 

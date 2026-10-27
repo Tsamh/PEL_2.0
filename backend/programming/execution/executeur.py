@@ -82,22 +82,30 @@ def _remettre_en_ordre(rapport, ordre_execution, nombre):
 
 
 def _terminer(execution, statut, message='', compilation='', resultats=()):
-    from programming.models import ResultatTest
+    """Enregistre la fin de l'exécution si ce worker détient encore la réclamation.
+
+    `debut`, posé par la réclamation, sert de jeton : la mise à jour est conditionnée à
+    (pk, statut = en_cours, debut inchangé). Si l'exécution a été reprise, réclamée par un autre worker ou
+    abandonnée entre-temps, rien n'est écrit (ni résultats, ni statut). Renvoie True si la fin est enregistrée.
+    """
+    from programming.models import Execution, ResultatTest
     with transaction.atomic():
+        ecrit = Execution.objects.filter(pk=execution.pk, statut=Execution.EN_COURS, debut=execution.debut).update(
+            statut=statut, message=tronquer(message), compilation=tronquer(compilation), fin=timezone.now())
+        if not ecrit:
+            logger.warning("Réclamation périmée pour l'exécution %s : résultats écartés", execution.pk)
+            return False
         execution.resultats.all().delete()
         ResultatTest.objects.bulk_create(resultats)
-        execution.statut = statut
-        execution.message = tronquer(message)
-        execution.compilation = tronquer(compilation)
-        execution.fin = timezone.now()
-        execution.save(update_fields=['statut', 'message', 'compilation', 'fin'])
+    execution.refresh_from_db()
+    return True
 
 
 def _terminer_en_erreur(execution, message):
     """Enregistre l'échec ; si l'enregistrement lui-même échoue (base indisponible), l'exception remonte et
     l'exécution, restée en cours, est reprise par la récupération des exécutions bloquées."""
     from programming.models import Execution
-    _terminer(execution, Execution.ERREUR, message=message)
+    return _terminer(execution, Execution.ERREUR, message=message)
 
 
 def executer(execution):
@@ -105,13 +113,13 @@ def executer(execution):
 
     Statut final `terminee` (avec un ResultatTest par cas) ou `erreur` (avec un message). Ne lève pas
     pour une panne du service ni pour un résultat impossible à enregistrer : l'exécution passe en
-    `erreur` avec « Le service d'exécution est indisponible. ».
+    `erreur` avec « Le service d'exécution est indisponible. ». Renvoie True si la fin a été enregistrée, False
+    si ce worker n'avait plus la réclamation (résultats écartés).
     """
     from programming.models import Execution
     langage = execution.devoir.langage
     if langage not in langages.LANGAGES:
-        _terminer_en_erreur(execution, MESSAGE_LANGAGE)
-        return
+        return _terminer_en_erreur(execution, MESSAGE_LANGAGE)
     try:
         cas = _cas(execution)
         fichiers = _fichiers(execution)
@@ -129,19 +137,17 @@ def executer(execution):
             rapport = _remettre_en_ordre(rapport, ordre_execution, len(cas))
     except ServiceIndisponible as erreur:
         logger.warning("Service d'exécution indisponible pour l'exécution %s : %s", execution.pk, erreur)
-        _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
-        return
+        return _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
     except Exception:  # noqa: BLE001 : toute panne de l'exécuteur est une erreur du service
         logger.exception("Panne de l'exécuteur pour l'exécution %s", execution.pk)
-        _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
-        return
+        return _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
 
     try:
-        _terminer(execution, Execution.TERMINEE, compilation=rapport.get('compilation') or '',
+        return _terminer(execution, Execution.TERMINEE, compilation=rapport.get('compilation') or '',
                   resultats=_resultats(execution, cas, rapport))
     except Exception:  # noqa: BLE001 : un résultat impossible à enregistrer ne doit pas laisser l'exécution en cours
         logger.exception("Enregistrement des résultats impossible pour l'exécution %s", execution.pk)
-        _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
+        return _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
 
 
 def _resultats(execution, cas, rapport):

@@ -3,11 +3,11 @@
 `--workers N` lance N fils (threads) qui réclament chacun des exécutions ; chaque fil a sa connexion à la base.
 Avec SQLite (développement), préférer `--workers 1` : l'écriture concurrente peut verrouiller la base.
 `--une-fois` traite la file séquentiellement, dans le processus courant, puis s'arrête (tests, cron).
-Ctrl+C arrête proprement : les exécutions en cours se terminent, aucune nouvelle n'est réclamée.
+Ctrl+C et SIGTERM arrêtent proprement : les exécutions en cours se terminent, aucune nouvelle n'est réclamée.
 """
 import logging
+import signal
 import threading
-import time
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
@@ -58,23 +58,36 @@ class Command(BaseCommand):
                 for _ in range(nombre)]
         for f in fils:
             f.start()
-        self.stdout.write(f"Worker démarré ({nombre} fil(s)). Ctrl+C pour arrêter.")
+        self.stdout.write(f"Worker démarré ({nombre} fil(s)). Ctrl+C ou SIGTERM pour arrêter.")
+        ancien = None
+        if threading.current_thread() is threading.main_thread():
+            ancien = signal.signal(signal.SIGTERM, lambda *_: arret.set())
         try:
-            while not arret.is_set():
-                time.sleep(INTERVALLE_REPRISE_S)
-                self._reprendre()
+            self._boucle_principale(arret)
         except KeyboardInterrupt:
             self.stdout.write("Arrêt en cours...")
         finally:
             arret.set()
             for f in fils:
                 f.join()
+            if ancien is not None:
+                signal.signal(signal.SIGTERM, ancien)
+
+    def _boucle_principale(self, arret, periode=INTERVALLE_REPRISE_S):
+        while not arret.wait(periode):
+            self._reprendre()
 
     def _reprendre(self):
+        # Connexion renouvelée à chaque passage : après une coupure de la base, la reprise reprend d'elle-même.
         try:
+            close_old_connections()
             fichier_attente.recuperer_bloquees()
         except Exception:  # noqa: BLE001
             logger.exception("Reprise des exécutions bloquées impossible")
+            try:
+                connection.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _vider(self):
         traitees = 0
@@ -89,11 +102,15 @@ class Command(BaseCommand):
         try:
             while not arret.is_set():
                 try:
+                    close_old_connections()
                     execution = fichier_attente.reclamer()
                 except Exception:  # noqa: BLE001 : base momentanément indisponible
                     logger.exception("Réclamation impossible")
                     execution = None
-                    close_old_connections()
+                    try:
+                        connection.close()
+                    except Exception:  # noqa: BLE001
+                        pass
                 if execution is None:
                     arret.wait(intervalle)
                     continue
