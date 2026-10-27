@@ -11,13 +11,22 @@ Déroulement d'une exécution :
    écrit sur le disque de l'hôte) reçoit le résultat de la compilation. La compilation tourne dans un
    conteneur à part, de courte durée, avec sa propre mémoire max(limite de l'exercice, 512 Mo) : javac et
    g++ ne sont pas soumis à la limite de l'exercice, qui reste appliquée telle quelle à chaque test. Le
-   volume y est monté en écriture sur /build, puis en lecture seule dans le conteneur des tests.
+   volume y est monté en écriture sur /build, et en lecture seule dans le conteneur des tests.
+   Ordre obligatoire : volume, PUIS conteneur des tests, PUIS compilation. Le pilote `local` monte un volume
+   tmpfs au premier conteneur qui l'utilise et le démonte (contenu perdu) quand plus aucun ne l'utilise :
+   le conteneur des tests, démarré avant, garde le binaire compilé en vie après la fin de la compilation.
 3. `docker run -d` démarre le conteneur des tests, qui ne fait que dormir (`sleep`, gardé par `--init`)
    sous l'utilisateur 65533 ; chaque test est un `docker exec -i --user 65534:65534` avec l'entrée sur stdin,
    sous `timeout -s KILL` à l'intérieur du conteneur. Avant chaque test sauf le premier, `kill -9 -1` lancé
    en tant que 65534 tue tous les processus laissés par le test précédent (processus d'arrière-plan,
-   `setsid`, fork bomb) sans toucher au gardien (autre uid) ni à l'init.
-4. Options de sécurité des deux conteneurs : pas de réseau, pas d'IPC partagé ni de /dev/shm
+   `setsid`, fork bomb) sans toucher au gardien (autre uid) ni à l'init, puis /tmp est vidé. Si ce
+   nettoyage ne peut pas s'exécuter alors que le conteneur tourne (fork bomb : quota de 64 processus plein),
+   un nouveau conteneur des tests est démarré (il garde le volume monté) et l'ancien est supprimé avec tous
+   ses processus : une fork bomb donne au pire des TLE, jamais une panne du service.
+   Les tests publics passent avant les tests cachés (executeur.py) : un état laissé dans /tmp ou dans
+   l'espace IPC privé par un test caché ne peut jamais réapparaître dans la sortie visible d'un test public.
+4. Options de sécurité des deux conteneurs : `--log-driver none` (rien n'est journalisé sur le disque de
+   l'hôte, la sortie attachée reste lue et bornée par l'exécuteur), pas de réseau, pas d'IPC partagé ni de /dev/shm
    (`--ipc none`), mémoire et mémoire d'échange égales, 1 processeur, 64 processus, système de fichiers en
    lecture seule sauf /tmp (tmpfs de 64 Mo), aucune capacité, pas d'élévation de privilèges, `--pull never`.
    Les images viennent de la configuration (PEL_IMAGES_EXECUTION) et sont de confiance : une image qui
@@ -64,7 +73,8 @@ DELAI_COMPILATION_S = 30          # délai de la compilation, dans le conteneur
 MARGE_HOTE_S = 10                 # délai côté hôte d'un exec = délai dans le conteneur + cette marge
 MARGE_TEST_S = 2                  # part du budget global par test, en plus de sa limite
 DELAI_COMMANDE_S = 30             # run -d, volume create, inspect, nettoyage des processus
-DELAI_NETTOYAGE_S = 15            # rm -f et volume rm du finally
+DELAI_NETTOYAGE_S = 10            # rm -f et volume rm du finally
+MARGE_ETIQUETTE_S = 120           # pel.fin = début + budget + cette marge (pire cas du finally, sauts d'horloge)
 DUREE_MAX_S = 240                 # plafond absolu du budget d'une exécution
 AGE_ORPHELIN_S = 600              # au-delà, un dossier pel-exec-* de l'hôte est un reste
 MEMOIRE_COMPILATION_MO = 512
@@ -73,7 +83,8 @@ UTILISATEUR = '65534:65534'       # compilation et tests
 UTILISATEUR_GARDIEN = '65533:65533'  # init et sleep du conteneur des tests : hors d'atteinte de kill -9 -1
 ETIQUETTE = 'pel.execution=1'
 ETIQUETTE_FIN = 'pel.fin'         # instant (secondes epoch) après lequel l'objet est un reste
-NETTOYAGE_PROCESSUS = 'kill -9 -1 2>/dev/null; exit 0'  # constante, aucune donnée de l'étudiant
+# Constante, aucune donnée de l'étudiant : tue les processus de 65534 et vide /tmp entre deux tests.
+NETTOYAGE_PROCESSUS = 'kill -9 -1 2>/dev/null; rm -rf /tmp/* /tmp/.[!.]* /tmp/..?* 2>/dev/null; exit 0'
 CODES_A_VERIFIER = (125, 126, 127, 137)
 MESSAGE_NON_LANCE = "Test non lancé : la durée totale de l'exécution est épuisée."
 MESSAGE_COUPE = "Le programme ne s'est pas terminé dans le délai."
@@ -176,6 +187,7 @@ def _commande(args, delai_s, entree=None):
 def _options_isolement(memoire_mo):
     memoire = f'{int(memoire_mo)}m'
     return [
+        '--log-driver', 'none',
         '--network', 'none',
         '--ipc', 'none',
         '--memory', memoire, '--memory-swap', memoire,
@@ -251,11 +263,13 @@ class ExecuteurDocker:
             raise ServiceIndisponible("Réponse de docker inspect illisible.") from erreur
         return bool(etat.get('Running')), bool(etat.get('OOMKilled'))
 
-    def _supprimer(self, nom):
+    def _supprimer(self, nom, delai_s=DELAI_NETTOYAGE_S):
         try:
-            self._commande([self.binaire, 'rm', '-f', nom], DELAI_NETTOYAGE_S)
+            s = self._commande([self.binaire, 'rm', '-f', nom], delai_s)
+            return not s.bloque and s.code == 0
         except Exception as erreur:  # noqa: BLE001 : la suppression ne doit jamais masquer l'erreur d'origine
             logger.warning("Suppression du conteneur %s impossible : %s", nom, erreur)
+            return False
 
     def _supprimer_volume(self, volume):
         try:
@@ -284,7 +298,7 @@ class ExecuteurDocker:
         volume = f'{nom}-build' if config.compilation else None
         budget = budget_s(bool(config.compilation), len(cas), limite_temps_ms)
         echeance = time.monotonic() + budget
-        fin = time.time() + budget + 3 * DELAI_NETTOYAGE_S
+        fin = time.time() + budget + MARGE_ETIQUETTE_S
         duree_s = math.ceil(budget + 2 * DELAI_NETTOYAGE_S)
         conteneurs = []
         racine = tempfile.mkdtemp(prefix='pel-exec-', dir=getattr(settings, 'PEL_DOSSIER_EXECUTION', None) or None)
@@ -305,11 +319,24 @@ class ExecuteurDocker:
                     raise ServiceIndisponible("Durée de l'exécution épuisée avant les tests.")
                 return min(normal, r)
 
-            compilation = ''
+            def demarrer(nom_gardien):
+                conteneurs.append(nom_gardien)
+                s = self._commande(self.commande_demarrage(nom_gardien, dossier, image, limite_memoire_mo, duree_s,
+                                                           fin, volume), delai(DELAI_COMMANDE_S))
+                if s.bloque or s.code != 0:
+                    raise ServiceIndisponible(f"Démarrage du conteneur en échec : {_texte(s.erreurs)}")
+                return nom_gardien
+
             if config.compilation:
                 s = self._commande(self.commande_volume(volume, fin), delai(DELAI_COMMANDE_S))
                 if s.bloque or s.code != 0:
                     raise ServiceIndisponible(f"Création du volume de compilation en échec : {_texte(s.erreurs)}")
+            # Le conteneur des tests démarre AVANT la compilation : il garde le volume tmpfs monté (le pilote
+            # local démonte un volume tmpfs, et perd son contenu, quand plus aucun conteneur ne l'utilise).
+            demarrer(nom)
+
+            compilation = ''
+            if config.compilation:
                 conteneurs.append(f'{nom}-c')
                 s = self._commande(self.commande_compilation(f'{nom}-c', dossier, volume, image, limite_memoire_mo,
                                                              config.compilation, fin),
@@ -325,12 +352,7 @@ class ExecuteurDocker:
                                        ).strip()
                     return {'compilation_ok': False, 'compilation': compilation, 'resultats': []}
 
-            conteneurs.append(nom)
-            s = self._commande(self.commande_demarrage(nom, dossier, image, limite_memoire_mo, duree_s, fin, volume),
-                               delai(DELAI_COMMANDE_S))
-            if s.bloque or s.code != 0:
-                raise ServiceIndisponible(f"Démarrage du conteneur en échec : {_texte(s.erreurs)}")
-            resultats = self._tests(nom, langage, lancement, cas, limite_temps_ms, reste)
+            resultats = self._tests(nom, langage, lancement, cas, limite_temps_ms, reste, demarrer, conteneurs)
             return {'compilation_ok': True, 'compilation': compilation, 'resultats': resultats}
         finally:
             for conteneur in reversed(conteneurs):
@@ -339,16 +361,29 @@ class ExecuteurDocker:
                 self._supprimer_volume(volume)
             shutil.rmtree(racine, ignore_errors=True)
 
-    def _tests(self, nom, langage, lancement, cas, limite_temps_ms, reste):
+    def _tests(self, nom, langage, lancement, cas, limite_temps_ms, reste, demarrer, conteneurs):
         resultats = []
         perdu = epuise = False
         limite_s = limite_temps_ms / 1000
+        base, remplacements = nom, 0
         for numero, un_cas in enumerate(cas):
             if perdu:
                 resultats.append(self._resultat(137, 0, b'', b'', memoire=True))
                 continue
             if not epuise and numero > 0:
                 etat = self._nettoyer_processus(nom, reste)
+                if etat == 'remplacer':
+                    # Nettoyage impossible alors que le conteneur tourne (fork bomb : quota de processus plein).
+                    # Un nouveau gardien prend le relais (il garde le volume de compilation monté), puis l'ancien
+                    # conteneur est supprimé avec tous ses processus. Jamais une panne du service.
+                    remplacements += 1
+                    if reste() < 1:
+                        etat = 'epuise'
+                    else:
+                        ancien, nom = nom, demarrer(f'{base}-r{remplacements}')
+                        if self._supprimer(ancien, min(DELAI_NETTOYAGE_S, max(1, reste()))):
+                            conteneurs.remove(ancien)
+                        etat = 'ok'
                 epuise = etat == 'epuise'
                 if etat == 'perdu':
                     perdu = True
@@ -374,8 +409,10 @@ class ExecuteurDocker:
                         perdu = True
                         resultats.append(self._resultat(137, s.temps_ms, s.sortie, s.erreurs, memoire=True))
                         continue
-                erreurs = (s.erreurs + b'\n' + MESSAGE_COUPE.encode()).lstrip(b'\n')
-                resultats.append(self._resultat(s.code, s.temps_ms, s.sortie, erreurs, delai=True))
+                r = self._resultat(s.code, s.temps_ms, s.sortie, s.erreurs, delai=True)
+                place = TAILLE_MAX_SORTIE - len(MESSAGE_COUPE) - 1  # le message survit à la troncature
+                r['erreurs'] = (r['erreurs'][:place] + '\n' + MESSAGE_COUPE).lstrip('\n')
+                resultats.append(r)
                 continue
             if s.code in CODES_A_VERIFIER:
                 en_marche, oom = self._etat(nom, min(DELAI_COMMANDE_S, max(1, reste())))
@@ -395,19 +432,21 @@ class ExecuteurDocker:
         return resultats
 
     def _nettoyer_processus(self, nom, reste):
-        """Tue les processus laissés par le test précédent. Renvoie 'ok', 'epuise' ou 'perdu'."""
+        """Tue les processus du test précédent et vide /tmp. Renvoie 'ok', 'epuise', 'perdu' ou 'remplacer'."""
         if reste() < 1:
             return 'epuise'
         s = self._commande(self.commande_nettoyage(nom), min(DELAI_COMMANDE_S, reste()))
-        if s.bloque:
-            if reste() < 1:
-                return 'epuise'
-            raise ServiceIndisponible("Le client docker ne répond plus pendant le nettoyage des processus.")
-        if s.code != 0:
+        if s.bloque and reste() < 1:
+            return 'epuise'
+        if s.bloque or s.code != 0:
+            # inspect lève ServiceIndisponible si le démon ne répond plus : seule vraie panne du service.
             en_marche, oom = self._etat(nom, min(DELAI_COMMANDE_S, max(1, reste())))
-            if not en_marche and oom:
-                return 'perdu'
-            raise ServiceIndisponible(f"Nettoyage des processus en échec (code {s.code}) : {_texte(s.erreurs)}")
+            if not en_marche:
+                if oom:
+                    return 'perdu'
+                raise ServiceIndisponible("Le conteneur s'est arrêté entre deux tests.")
+            logger.warning("Nettoyage impossible dans %s (code %s) : conteneur remplacé", nom, s.code)
+            return 'remplacer'
         return 'ok'
 
     @staticmethod

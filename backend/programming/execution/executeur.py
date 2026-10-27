@@ -66,6 +66,21 @@ def _fichiers(execution):
     return fichiers if isinstance(fichiers, list) else []
 
 
+def _public(cas):
+    """Un essai libre (sans CasDeTest) est assimilé à un test public."""
+    return cas is None or bool(cas.public)
+
+
+def _remettre_en_ordre(rapport, ordre_execution, nombre):
+    """Remet les résultats bruts (reçus dans l'ordre d'exécution) dans l'ordre des cas."""
+    bruts = rapport.get('resultats') or []
+    remis = [None] * nombre
+    for position, indice in enumerate(ordre_execution):
+        if position < len(bruts):
+            remis[indice] = bruts[position]
+    return {**rapport, 'resultats': remis}
+
+
 def _terminer(execution, statut, message='', compilation='', resultats=()):
     from programming.models import ResultatTest
     with transaction.atomic():
@@ -105,8 +120,13 @@ def executer(execution):
         if probleme:
             rapport = {'compilation_ok': False, 'compilation': probleme, 'resultats': []}
         else:
-            rapport = obtenir_executeur().lancer(langage, fichiers, [{'entree': e} for _, e, _ in cas],
+            # Tests publics d'abord, cachés ensuite : l'état laissé par un test caché (/tmp, IPC) ne peut pas
+            # apparaître dans la sortie, visible, d'un test public. Les résultats gardent l'ordre `ordre`.
+            ordre_execution = sorted(range(len(cas)), key=lambda i: (not _public(cas[i][0]), i))
+            rapport = obtenir_executeur().lancer(langage, fichiers,
+                                                 [{'entree': cas[i][1]} for i in ordre_execution],
                                                  exercice.limite_temps_ms, exercice.limite_memoire_mo)
+            rapport = _remettre_en_ordre(rapport, ordre_execution, len(cas))
     except ServiceIndisponible as erreur:
         logger.warning("Service d'exécution indisponible pour l'exécution %s : %s", execution.pk, erreur)
         _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)

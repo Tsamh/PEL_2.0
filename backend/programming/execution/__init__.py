@@ -16,6 +16,10 @@ import re
 
 MESSAGE_INDISPONIBLE = "Le service d'exécution est indisponible."
 TAILLE_MAX_SORTIE = 64 * 1024
+# Borne côté enseignant (validation de l'API, tâche 4) : nombre de tests x limite_temps_ms d'un exercice.
+# Avec le plafond de 240 s d'une exécution (docker.DUREE_MAX_S), il reste environ 100 s pour le démarrage,
+# la compilation et le surcoût des docker exec : un programme correct n'est jamais coupé par le budget global.
+BUDGET_TESTS_MS = 140_000
 
 # Un champ texte PostgreSQL refuse le caractère NUL ; un demi-codet UTF-16 isolé ne s'encode pas en UTF-8.
 _NON_STOCKABLES = re.compile('[\x00\ud800-\udfff]')

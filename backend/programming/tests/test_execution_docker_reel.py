@@ -49,7 +49,7 @@ class DockerReelTests(SimpleTestCase):
 
     def test_c_compile_et_lance(self):
         _, statuts = self.statuts('c', 'main.c', '#include <stdio.h>\nint main(){int a,b;scanf("%d %d",&a,&b);'
-                                  'printf("%d\n",a+b);return 0;}\n', ['1 2', '2 2'], ['3', '4'])
+                                  'printf("%d\\n",a+b);return 0;}\n', ['1 2', '2 2'], ['3', '4'])
         self.assertEqual(statuts, ['OK', 'OK'])
 
     def test_c_erreur_de_compilation(self):
@@ -110,3 +110,26 @@ class DockerReelTests(SimpleTestCase):
 
     def test_nettoyage_des_orphelins(self):
         self.assertEqual(set(nettoyer_orphelins()), {'conteneurs', 'volumes', 'dossiers'})
+
+    def test_tmp_vide_entre_deux_tests(self):
+        code = ("import os, sys\n"
+                "if sys.stdin.read().strip() == 'ecrire':\n"
+                "    open('/tmp/marque', 'w').write('x'); print('ecrit')\n"
+                "else:\n    print(os.path.exists('/tmp/marque'))\n")
+        rapport, statuts = self.statuts('python', 'main.py', code, ['ecrire', 'lire'], ['ecrit', 'False'])
+        self.assertEqual(statuts, ['OK', 'OK'], rapport)
+
+    def test_cpp_binaire_conserve_apres_la_compilation(self):
+        # Le volume tmpfs /build reste monté par le conteneur des tests après la fin de la compilation.
+        _, statuts = self.statuts('cpp', 'main.cpp', '#include <iostream>\nint main(){std::cout<<"ok"<<std::endl;}\n',
+                                  ['', ''], ['ok', 'ok'])
+        self.assertEqual(statuts, ['OK', 'OK'])
+
+    def test_fork_bomb_puis_test_normal(self):
+        code = ("import os, sys\n"
+                "if sys.stdin.read().strip() == 'bombe':\n"
+                "    while True:\n        try:\n            os.fork()\n        except OSError:\n            pass\n"
+                "print('ok')\n")
+        rapport, statuts = self.statuts('python', 'main.py', code, ['bombe', 'normal'], ['', 'ok'], temps=1000)
+        self.assertEqual(statuts[1], 'OK', rapport)
+        self.assertIn(statuts[0], ('TLE', 'RE'))

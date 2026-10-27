@@ -306,6 +306,7 @@ class ExecuteurDockerTests(SimpleTestCase):
         self.assertEqual(run, [
             'docker', 'run', '-d', '--rm', '--name', nom, '--label', 'pel.execution=1',
             '--label', f'pel.fin={self.fin(run)}', '--pull', 'never', '--init',
+            '--log-driver', 'none',
             '--network', 'none', '--ipc', 'none', '--memory', '128m', '--memory-swap', '128m', '--cpus', '1',
             '--pids-limit', '64', '--read-only', '--tmpfs', '/tmp:rw,exec,size=64m', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges', '--user', '65533:65533',
@@ -333,6 +334,7 @@ class ExecuteurDockerTests(SimpleTestCase):
         self.assertEqual(compilation[0], [
             'docker', 'run', '--rm', '--name', f'{nom}-c', '--label', 'pel.execution=1',
             '--label', f'pel.fin={self.fin(compilation[0])}', '--pull', 'never', '--init',
+            '--log-driver', 'none',
             '--network', 'none', '--ipc', 'none', '--memory', '512m', '--memory-swap', '512m', '--cpus', '1',
             '--pids-limit', '64', '--read-only', '--tmpfs', '/tmp:rw,exec,size=64m', '--cap-drop', 'ALL',
             '--security-opt', 'no-new-privileges', '--user', '65534:65534',
@@ -351,7 +353,10 @@ class ExecuteurDockerTests(SimpleTestCase):
                          [['docker', 'exec', '-i', '--user', '65534:65534', nom, 'timeout', '-s', 'KILL', '2',
                            '/build/prog']] * 2)
         self.assertTrue(rapport['compilation_ok'])
-        self.assertEqual(appels[-3:], [['docker', 'rm', '-f', nom], ['docker', 'rm', '-f', f'{nom}-c'],
+        # Le conteneur des tests démarre avant la compilation : il garde le volume tmpfs (et le binaire) monté.
+        self.assertEqual([genre(a) for a in appels],
+                         ['volume', 'demarrage', 'compilation', 'test', 'nettoyage', 'test', 'rm', 'rm', 'volume_rm'])
+        self.assertEqual(appels[-3:], [['docker', 'rm', '-f', f'{nom}-c'], ['docker', 'rm', '-f', nom],
                                        ['docker', 'volume', 'rm', '-f', volume]])
 
     def test_memoire_de_compilation_au_moins_la_limite(self):
@@ -367,7 +372,8 @@ class ExecuteurDockerTests(SimpleTestCase):
         nom = self.nom(appels)
         test = ['docker', 'exec', '-i', '--user', '65534:65534', nom, 'timeout', '-s', 'KILL', '1.5',
                 'python3', '-B', 'main.py']
-        nettoyage = ['docker', 'exec', '--user', '65534:65534', nom, 'sh', '-c', 'kill -9 -1 2>/dev/null; exit 0']
+        nettoyage = ['docker', 'exec', '--user', '65534:65534', nom, 'sh', '-c',
+                     'kill -9 -1 2>/dev/null; rm -rf /tmp/* /tmp/.[!.]* /tmp/..?* 2>/dev/null; exit 0']
         execs = [a for a in appels if a[1] == 'exec']
         self.assertEqual(execs, [test, nettoyage, test])
         self.assertEqual(self.faux.entrees, [b'1', 'é'.encode('utf-8')])
@@ -382,10 +388,10 @@ class ExecuteurDockerTests(SimpleTestCase):
         self.assertFalse(rapport['compilation_ok'])
         self.assertEqual(rapport['compilation'], 'main.c:1: error')
         self.assertEqual(rapport['resultats'], [])
-        self.assertFalse(self.faux.de_genre('demarrage'))
         self.assertFalse(self.faux.de_genre('test'))
         nom = self.nom(appels)
-        self.assertEqual(appels[-2:], [['docker', 'rm', '-f', f'{nom}-c'],
+        self.assertEqual([genre(a) for a in appels], ['volume', 'demarrage', 'compilation', 'rm', 'rm', 'volume_rm'])
+        self.assertEqual(appels[-3:], [['docker', 'rm', '-f', f'{nom}-c'], ['docker', 'rm', '-f', nom],
                                        ['docker', 'volume', 'rm', '-f', f'{nom}-build']])
 
     def test_compilation_hors_delai_ou_memoire(self):
@@ -402,7 +408,7 @@ class ExecuteurDockerTests(SimpleTestCase):
             with self.subTest(reponse=reponse[0]), self.assertRaises(ServiceIndisponible):
                 self.lancer(scenario_normal(compilation=reponse), langage='c', fichiers=self.FICHIERS_C)
             nom = self.nom(self.faux.appels)
-            self.assertEqual(self.faux.appels[-2:], [['docker', 'rm', '-f', f'{nom}-c'],
+            self.assertEqual(self.faux.appels[-3:], [['docker', 'rm', '-f', f'{nom}-c'], ['docker', 'rm', '-f', nom],
                                                      ['docker', 'volume', 'rm', '-f', f'{nom}-build']])
 
     def test_sortie_de_compilation_sans_nul(self):
@@ -523,11 +529,45 @@ class ExecuteurDockerTests(SimpleTestCase):
         with self.assertRaises(ServiceIndisponible):
             self.lancer(scenario_normal(sorties=[('bloque', b'', b'')], inspect=[('bloque', b'', b'')]))
 
-    def test_nettoyage_en_echec(self):
+    def test_fork_bomb_nettoyage_impossible_conteneur_remplace(self):
+        # Quota de processus plein : l'exec du nettoyage échoue, le conteneur tourne encore. Un nouveau
+        # conteneur des tests prend le relais, l'ancien est supprimé ; aucune panne du service.
+        for nettoyage in [(126, b'', b'OCI runtime exec failed: resource temporarily unavailable'),
+                          ('bloque', b'', b'')]:
+            with self.subTest(nettoyage=nettoyage[0]):
+                rapport, appels = self.lancer(
+                    scenario_normal(sorties=[('bloque', b'', b''), (0, b'2\n', b''), (0, b'3\n', b'')],
+                                    nettoyage=nettoyage),
+                    langage='c', fichiers=self.FICHIERS_C, cas=[{'entree': '1'}, {'entree': '2'}, {'entree': '3'}],
+                    temps=1000)
+                nom = self.nom(appels)
+                statuts = [statut_du_resultat(True, r, a) for r, a in zip(rapport['resultats'], ['1', '2', '3'])]
+                self.assertEqual(statuts, ['TLE', 'OK', 'OK'])
+                demarrages = self.faux.de_genre('demarrage')
+                noms = [d[d.index('--name') + 1] for d in demarrages]
+                self.assertEqual(noms, [nom, f'{nom}-r1', f'{nom}-r2'])
+                # le nouveau gardien remonte le volume de compilation avant la suppression de l'ancien
+                self.assertTrue(all(f'type=volume,source={nom}-build,target=/build,readonly' in d
+                                    for d in demarrages))
+                tests = self.faux.de_genre('test')
+                self.assertEqual([t[5] for t in tests], [nom, f'{nom}-r1', f'{nom}-r2'])
+                sequence = [(genre(a), a[-1] if genre(a) == 'rm' else None) for a in appels
+                            if genre(a) in ('demarrage', 'rm')]
+                self.assertEqual(sequence, [('demarrage', None), ('demarrage', None), ('rm', nom),
+                                            ('demarrage', None), ('rm', f'{nom}-r1'), ('rm', f'{nom}-r2'),
+                                            ('rm', f'{nom}-c')])
+                self.assertEqual(appels[-1], ['docker', 'volume', 'rm', '-f', f'{nom}-build'])
+
+    def test_nettoyage_conteneur_arrete_sans_oom(self):
         with self.assertRaises(ServiceIndisponible):
-            self.lancer(scenario_normal(nettoyage=(1, b'', b'sh: not found')), cas=[{'entree': ''}] * 2)
-        with self.assertRaises(ServiceIndisponible):
-            self.lancer(scenario_normal(nettoyage=('bloque', b'', b'')), cas=[{'entree': ''}] * 2)
+            self.lancer(scenario_normal(nettoyage=(1, b'', b''), inspect=b'{"Running":false,"OOMKilled":false}'),
+                        cas=[{'entree': ''}] * 2)
+
+    def test_message_coupe_survit_a_la_troncature(self):
+        rapport, _ = self.lancer(scenario_normal(sorties=[('bloque', b'', b'e' * (TAILLE_MAX_SORTIE * 2))]))
+        erreurs = rapport['resultats'][0]['erreurs']
+        self.assertTrue(erreurs.endswith(module_docker.MESSAGE_COUPE))
+        self.assertLessEqual(len(erreurs), TAILLE_MAX_SORTIE)
 
     def test_budget(self):
         self.assertEqual(budget_s(False, 2, 1000), 30 + 2 * 3)
@@ -801,3 +841,32 @@ class ExecuterTests(TestCase):
         self.assertEqual((e.statut, e.message), (Execution.ERREUR, MESSAGE_INDISPONIBLE))
         self.assertFalse(e.resultats.exists())
         self.assertIsNotNone(e.fin)
+
+    def test_tests_publics_avant_les_tests_caches(self):
+        exo = Exercice.objects.create(devoir=self.devoir, titre='Ordre')
+        cache = CasDeTest.objects.create(exercice=exo, ordre=0, entree='c0', sortie_attendue='c0', public=False)
+        public = CasDeTest.objects.create(exercice=exo, ordre=1, entree='p1', sortie_attendue='p1', public=True)
+        cache2 = CasDeTest.objects.create(exercice=exo, ordre=2, entree='c2', sortie_attendue='x', public=False)
+        soumission = SoumissionDevoir.objects.create(devoir=self.devoir, etudiant=self.w.a.etu)
+        reponse = ReponseExercice.objects.create(soumission=soumission, exercice=exo,
+                                                 fichiers=[{'nom': 'main.py', 'contenu': 'print(input())'}])
+        e = Execution.objects.create(type=Execution.CORRECTION, demandeur=self.w.a.etu, devoir=self.devoir,
+                                     exercice=exo, reponse=reponse, statut=Execution.EN_COURS)
+        vrai = ExecuteurFactice.lancer
+        recus = []
+
+        def lancer(executeur, langage, fichiers, cas, *args):
+            recus.extend(c['entree'] for c in cas)
+            return vrai(executeur, langage, fichiers, cas, *args)
+        with mock.patch.object(ExecuteurFactice, 'lancer', lancer):
+            executer(e)
+        self.assertEqual(recus, ['p1', 'c0', 'c2'])
+        self.assertEqual([(r.ordre, r.cas_id, r.sortie, r.statut) for r in e.resultats.order_by('ordre')],
+                         [(0, cache.id, 'c0', 'OK'), (1, public.id, 'p1', 'OK'), (2, cache2.id, 'c2', 'WA')])
+
+    def test_borne_des_tests_pour_l_enseignant(self):
+        from programming.execution import BUDGET_TESTS_MS
+        self.assertEqual(BUDGET_TESTS_MS, 140_000)
+        self.assertLessEqual(BUDGET_TESTS_MS / 1000 + module_docker.DELAI_COMMANDE_S * 2
+                             + module_docker.DELAI_COMPILATION_S + module_docker.MARGE_HOTE_S,
+                             module_docker.DUREE_MAX_S)
