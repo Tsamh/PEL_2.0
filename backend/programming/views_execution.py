@@ -2,7 +2,7 @@
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from rest_framework import mixins, permissions, viewsets
 from rest_framework.exceptions import Throttled, ValidationError
 from rest_framework.response import Response
@@ -14,7 +14,7 @@ from .execution import file as file_execution
 from .execution.executeur import MESSAGE_LANGAGE
 from .execution.langages import LANGAGES
 from .models import Execution
-from .serializers import CONTENU_FICHIER_MAX, contient_non_stockable, execution_donnees, valider_fichiers
+from .serializers import CONTENU_FICHIER_MAX, NON_AUTORISE, contient_non_stockable, execution_donnees, valider_fichiers
 
 MESSAGE_EN_COURS = "Une exécution est déjà en cours."
 MESSAGE_TROP = "Trop d'exécutions : patientez une minute."
@@ -65,7 +65,7 @@ def lire_demande(devoir, donnees):
     if not isinstance(entree, str) or len(entree) > CONTENU_FICHIER_MAX:
         raise ValidationError({'entree': [f"L'entrée doit être un texte d'au plus {CONTENU_FICHIER_MAX} caractères."]})
     if contient_non_stockable(entree):
-        raise ValidationError({'entree': ["L'entrée contient un caractère non autorisé (NUL)."]})
+        raise ValidationError({'entree': [f"L'entrée contient un caractère non autorisé ({NON_AUTORISE})."]})
     type_execution = MODES[mode]
     return exercice, type_execution, fichiers, entree if type_execution == Execution.ESSAI_RUN else ''
 
@@ -77,8 +77,9 @@ def demander_essai(user, devoir, donnees):
         raise ValidationError({'detail': MESSAGE_LANGAGE})
     exercice, type_execution, fichiers, entree = lire_demande(devoir, donnees)
     with transaction.atomic():
-        # Verrou sur l'utilisateur (PostgreSQL) : deux demandes simultanées ne passent pas toutes les deux.
-        get_user_model().objects.select_for_update().filter(pk=user.pk).first()
+        # Écriture d'abord : la ligne de l'utilisateur est verrouillée (PostgreSQL) et SQLite prend son verrou
+        # d'écriture avant le contrôle ; deux demandes simultanées sont ainsi sérialisées.
+        get_user_model().objects.filter(pk=user.pk).update(last_login=F('last_login'))
         if Execution.objects.filter(demandeur=user, type__in=ESSAIS, statut__in=ACTIVES).exists():
             raise Conflit(MESSAGE_EN_COURS)
         return file_execution.mettre_en_file(type_execution, user, devoir, exercice, fichiers=fichiers, entree=entree)

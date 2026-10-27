@@ -3,13 +3,17 @@
 Exécuteur factice (`PEL_EXECUTEUR='factice'`) : aucun code n'est lancé ; la file est traitée par
 `executer_file --une-fois`.
 """
+import json
 from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
+from unittest import mock
 
 from django.core.cache import cache
 from django.core.management import call_command
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from accounts.testing import build_world, client_for, make_user
@@ -508,3 +512,150 @@ class ValidationExerciceTests(TestCase):
                 self.assertEqual(self.creer(fichiers_initiaux=fichiers).status_code, 400)
         self.assertEqual(self.creer(solution=[{'nom': 'main.py', 'contenu': '\x00'}]).status_code, 400)
         self.assertEqual(self.creer(fichiers_initiaux=[{'nom': 'a..b.py', 'contenu': ''}]).status_code, 201)
+
+
+def brut(client, url, corps):
+    """POST d'un JSON échappé : `\\ud800` redevient un demi-codet isolé une fois décodé par le serveur."""
+    return client.post(url, data=json.dumps(corps), content_type='application/json')
+
+
+DEMI = '\ud800'
+
+
+class EntreesNonEncodablesTests(Base):
+    def test_executer(self):
+        url = f'{P}/devoirs/{self.a.devoir.id}/executer/'
+        base = {'exercice': self.ex1.id, 'fichiers': fic('print(1)'), 'mode': 'run', 'entree': ''}
+        cas = {
+            'nom': {**base, 'fichiers': [{'nom': f'a{DEMI}.py', 'contenu': ''}]},
+            'nom en double': {**base, 'fichiers': [{'nom': f'a{DEMI}.py', 'contenu': ''}] * 2},
+            'contenu': {**base, 'fichiers': fic(f'x{DEMI}')},
+            'entree': {**base, 'entree': f'x{DEMI}'},
+        }
+        for nom, corps in cas.items():
+            with self.subTest(cas=nom):
+                cache.clear()
+                self.assertEqual(brut(self.etu, url, corps).status_code, 400)
+        self.assertFalse(Execution.objects.exists())
+
+    def test_soumission_et_devoir(self):
+        res = brut(self.etu, f'{P}/soumissions/', {'devoir': self.a.devoir.id, 'reponses': [
+            {'exercice': self.ex1.id, 'fichiers': [{'nom': f'm{DEMI}.py', 'contenu': ''}]}]})
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(SoumissionDevoir.objects.exists())
+        res = brut(self.ens, f'{P}/devoirs/', {
+            'titre': 'TP', 'filiere': self.a.filiere.id, 'langage': 'python', 'classes': [self.a.classe.id],
+            'exercices': [exercice_payload(fichiers_initiaux=[{'nom': f'm{DEMI}.py', 'contenu': ''}])]})
+        self.assertEqual(res.status_code, 400)
+
+    def test_commentaire(self):
+        soumission = SoumissionDevoir.objects.create(devoir=self.a.devoir, etudiant=self.a.etu)
+        url = f'{P}/soumissions/{soumission.id}/corriger/'
+        for commentaire in (f'x{DEMI}', 'a\x00b'):
+            self.assertEqual(brut(self.ens, url, {'score': 3, 'commentaire': commentaire}).status_code, 400)
+        soumission.refresh_from_db()
+        self.assertEqual(soumission.statut, 'soumis')
+
+    def test_donnees_anciennes_affichables(self):
+        soumission = SoumissionDevoir.objects.create(devoir=self.a.devoir, etudiant=self.a.etu, statut='corrige',
+                                                     score=3, commentaire='ok')
+        # Le JSON stocké échappe le demi-codet (SQLite comme PostgreSQL acceptent alors l'écriture).
+        soumission.reponses.create(exercice=self.ex1, fichiers=[{'nom': f'm{DEMI}.py', 'contenu': DEMI}])
+        for client, url in ((self.ens, f'{P}/soumissions/'), (self.ens, f'{P}/soumissions/{soumission.id}/'),
+                            (self.etu, f'{P}/soumissions/'), (self.etu, f'{P}/soumissions/{soumission.id}/')):
+            with self.subTest(url=url):
+                res = client.get(url)
+                self.assertEqual(res.status_code, 200)
+                self.assertIn('m�.py', res.content.decode())
+
+
+class ListeSoumissionsTests(Base):
+    def lignes(self, res):
+        return res.data['results'] if 'results' in res.data else res.data
+
+    def test_resume_sans_sorties(self):
+        soumission = self.soumettre(code1='# PEL:SORTIE=SORTIE_ETUDIANT_LONGUE')
+        traiter_file()
+        res = self.ens.get(f'{P}/soumissions/', {'devoir': self.a.devoir.id})
+        self.assertEqual(res.status_code, 200)
+        ligne = self.lignes(res)[0]
+        self.assertEqual((ligne['id'], ligne['statut'], ligne['note_proposee']),
+                         (soumission.id, 'corrigee_auto', '5.50'))
+        correction = ligne['reponses'][0]['correction']
+        self.assertEqual(set(correction), {'id', 'statut', 'message', 'nombre_tests', 'compteurs'})
+        self.assertEqual((correction['statut'], correction['nombre_tests'], correction['compteurs']),
+                         ('terminee', 2, {'WA': 2}))
+        self.assertNotIn('"sortie"', res.content.decode())
+        self.assertNotIn('"erreurs"', res.content.decode())
+        self.assertNotIn('CACHE', res.content.decode())
+        # Le détail garde les résultats complets.
+        detail = self.ens.get(f'{P}/soumissions/{soumission.id}/')
+        self.assertEqual(detail.data['reponses'][0]['correction']['resultats'][0]['sortie'], 'SORTIE_ETUDIANT_LONGUE')
+        self.assertEqual(len(detail.data['reponses'][0]['correction']['resultats']), 2)
+
+    def test_pas_de_requete_par_soumission(self):
+        def compter():
+            with CaptureQueriesContext(connection) as requetes:
+                self.assertEqual(self.ens.get(f'{P}/soumissions/', {'devoir': self.a.devoir.id}).status_code, 200)
+            return len(requetes)
+
+        self.soumettre()
+        traiter_file()
+        une = compter()
+        for i in range(3):
+            etu = make_user(f'etu_liste{i}', 'etudiant', self.a.etab)
+            self.a.devoir.etudiants.add(etu)
+            self.etu = client_for(etu)
+            self.soumettre()
+        traiter_file()
+        self.assertEqual(compter(), une)
+
+
+class CorrigerConcurrenceTests(Base):
+    def test_correction_en_cours_sans_score_409(self):
+        soumission = self.soumettre()
+        url = f'{P}/soumissions/{soumission.id}/corriger/'
+        res = self.ens.post(url, {}, format='json')
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(str(res.data['detail']),
+                         "Une correction est en cours : attendez son résultat ou indiquez une note.")
+        res = self.ens.post(url, {'score': 9}, format='json')
+        self.assertEqual((res.status_code, res.data['score'], res.data['statut']), (200, 9, 'corrige'))
+
+    def test_note_proposee_du_worker_preservee(self):
+        soumission = SoumissionDevoir.objects.create(devoir=self.a.devoir, etudiant=self.a.etu,
+                                                     statut='corrigee_auto', note_proposee=Decimal('2'))
+
+        def worker_entre_temps(*args):
+            SoumissionDevoir.objects.filter(pk=soumission.pk).update(note_proposee=Decimal('10.40'))
+
+        with mock.patch('programming.views.SoumissionDevoirViewSet.verifier_ecriture',
+                        side_effect=worker_entre_temps):
+            res = self.ens.post(f'{P}/soumissions/{soumission.id}/corriger/', {'commentaire': 'ok'}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
+        soumission.refresh_from_db()
+        self.assertEqual((soumission.score, soumission.note_proposee, soumission.statut),
+                         (10, Decimal('10.40'), 'corrige'))
+
+
+class EssaiActifSerialiseTests(Base):
+    def test_ecriture_avant_le_controle(self):
+        with CaptureQueriesContext(connection) as requetes:
+            self.assertEqual(self.executer().status_code, 202)
+        sql = [q['sql'] for q in requetes.captured_queries]
+        verrou = next(i for i, q in enumerate(sql) if q.startswith('UPDATE') and 'last_login' in q)
+        controle = next(i for i, q in enumerate(sql) if q.startswith('SELECT') and 'programming_execution' in q)
+        self.assertLess(verrou, controle)
+
+
+class ResultatSansCasTests(Base):
+    def test_correction_sans_cas_reduite_au_statut(self):
+        self.politique('immediate')
+        soumission = self.soumettre()
+        traiter_file()
+        correction = Execution.objects.filter(reponse__soumission=soumission, exercice=self.ex1).first()
+        ResultatTest.objects.create(execution=correction, cas=None, ordre=5, statut='RE', temps_ms=2,
+                                    sortie='SORTIE_SANS_CAS', erreurs='ERREUR_SANS_CAS')
+        res = self.etu.get(f'{P}/soumissions/{soumission.id}/')
+        self.assertEqual(res.data['reponses'][0]['correction']['resultats'][-1], {'statut': 'RE', 'temps_ms': 2})
+        self.assertNotIn('SANS_CAS', res.content.decode())

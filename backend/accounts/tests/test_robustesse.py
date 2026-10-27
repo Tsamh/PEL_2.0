@@ -23,6 +23,22 @@ class DashboardEtudiantTests(TestCase):
         self.assertGreaterEqual(Quiz.objects.filter(est_publie=True).count(), 2)
 
 
+class DashboardEnseignantTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.w = build_world()
+
+    def test_soumissions_a_corriger_comptent_la_correction_automatique(self):
+        from programming.models import SoumissionDevoir
+        a = self.w.a
+        for i, statut in enumerate(('soumis', 'en_correction', 'corrigee_auto', 'corrige')):
+            etu = make_user(f'etu_dash{i}', 'etudiant', a.etab)
+            SoumissionDevoir.objects.create(devoir=a.devoir, etudiant=etu, statut=statut)
+        res = client_for(a.ens).get(f'{U}/dashboard_stats/')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual((res.data['soumissions_recues'], res.data['soumissions_a_corriger']), (4, 3))
+
+
 class EntreesInvalidesTests(TestCase):
     @classmethod
     def setUpTestData(cls):

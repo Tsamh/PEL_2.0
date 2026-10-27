@@ -6,6 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from django.db import IntegrityError, transaction
+from django.db.models import Prefetch
 
 from accounts.permissions import (
     IsEtudiant, RolePermission, CREATEURS, GESTION, TOUS_LES_ROLES, ENSEIGNANT, ETUDIANT,
@@ -23,11 +24,11 @@ from quiz.views import etablissement_evaluation
 from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_archivee
 from .execution import file as file_execution
 from .execution.executeur import MESSAGE_LANGAGE
-from .models import Devoir, Execution, ReponseExercice, SoumissionDevoir, NoteMatiere
+from .models import Devoir, Execution, ReponseExercice, ResultatTest, SoumissionDevoir, NoteMatiere
 from .serializers import (
     DevoirSerializer, DevoirEtudiantSerializer, SoumissionDevoirSerializer, SoumissionDevoirEtudiantSerializer,
     SoumissionDevoirUpdateSerializer,
-    NoteMatiereSerializer, valider_reponses,
+    NoteMatiereSerializer, valider_reponses, ATTRIBUT_CORRECTIONS, NON_AUTORISE, contient_non_stockable,
 )
 from .validation import PROFIL_DEVOIR
 from .views_execution import ACTIVES, demander_essai, langage_executable
@@ -37,6 +38,7 @@ MESSAGE_DEJA_SOUMIS = "Vous avez déjà soumis ce devoir."
 MESSAGE_PAS_OUVERT = "Ce devoir n'est pas ouvert."
 MESSAGE_FERME = "Ce devoir est fermé."
 MESSAGE_SANS_NOTE = "Aucune note proposée : indiquez un score."
+MESSAGE_CORRECTION_ATTENDUE = "Une correction est en cours : attendez son résultat ou indiquez une note."
 MESSAGE_DEJA_VALIDEE = "Cette soumission est déjà validée : sa correction ne peut plus être relancée."
 MESSAGE_CORRECTION_EN_FILE = "Une correction est déjà en cours pour cette soumission."
 MESSAGE_RIEN_A_RELANCER = "Aucune correction en erreur à relancer."
@@ -196,7 +198,21 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
     def get_queryset(self):
         qs = super().get_queryset()
         devoir = en_entier(self.request.query_params.get('devoir'))
-        return qs.filter(devoir_id=devoir) if devoir is not None else qs
+        qs = qs.filter(devoir_id=devoir) if devoir is not None else qs
+        if self.action == 'list' and self.request.user.role != ETUDIANT:
+            # Liste des correcteurs : dernières corrections et statuts de leurs tests, sans les sorties.
+            corrections = (Execution.objects.filter(type=Execution.CORRECTION)
+                           .only('id', 'reponse_id', 'statut', 'message').order_by('-id')
+                           .prefetch_related(Prefetch('resultats', queryset=ResultatTest.objects.only(
+                               'id', 'execution_id', 'statut'))))
+            qs = qs.prefetch_related(Prefetch('reponses__executions', queryset=corrections,
+                                              to_attr=ATTRIBUT_CORRECTIONS))
+        return qs
+
+    def get_serializer_context(self):
+        contexte = super().get_serializer_context()
+        contexte['resume'] = self.action == 'list'
+        return contexte
 
     def get_serializer_class(self):
         if self.action in ('update', 'partial_update'):
@@ -257,7 +273,6 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
     def corriger(self, request, pk=None):
         soumission = self.get_object()
         self.verifier_ecriture(soumission)
-        avant = soumission.score
         donnees = request.data
         if not isinstance(donnees, dict):
             raise ValidationError("Le corps de la requête doit être un objet JSON.")
@@ -265,6 +280,8 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
         commentaire = donnees.get('commentaire', '')
         if not isinstance(commentaire, str):
             raise ValidationError({'commentaire': "Le commentaire doit être un texte."})
+        if contient_non_stockable(commentaire):
+            raise ValidationError({'commentaire': f"Le commentaire contient un caractère non autorisé ({NON_AUTORISE})."})
         # Score entier : au plus l'arrondi inférieur du barème du devoir.
         maximum = math.floor(soumission.devoir.bareme)
         if score is not None:
@@ -273,16 +290,25 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
                 raise ValidationError({'score': "Le score doit être un entier."})
             if not 0 <= score <= maximum:
                 raise ValidationError({'score': f"Le score doit être compris entre 0 et {maximum}."})
-        elif soumission.note_proposee is not None:
-            # Sans score : la note proposée, arrondie à l'entier le plus proche et bornée au barème.
-            arrondie = int(soumission.note_proposee.quantize(Decimal('1'), rounding=ROUND_HALF_UP))
-            score = min(max(arrondie, 0), maximum)
-        else:
-            raise ValidationError({'score': MESSAGE_SANS_NOTE})
-        soumission.score = score
-        soumission.commentaire = commentaire
-        soumission.statut = 'corrige'
-        soumission.save()
+        with transaction.atomic():
+            # Relue sous verrou : la note proposée posée entre-temps par le worker est prise en compte.
+            soumission = SoumissionDevoir.objects.select_for_update().select_related('devoir', 'etudiant').get(
+                pk=soumission.pk)
+            avant = soumission.score
+            if score is None:
+                if Execution.objects.filter(reponse__soumission=soumission, type=Execution.CORRECTION,
+                                            statut__in=ACTIVES).exists():
+                    raise Conflit(MESSAGE_CORRECTION_ATTENDUE)
+                if soumission.note_proposee is None:
+                    raise ValidationError({'score': MESSAGE_SANS_NOTE})
+                # Sans score : la note proposée, arrondie à l'entier le plus proche et bornée au barème.
+                arrondie = int(soumission.note_proposee.quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+                score = min(max(arrondie, 0), maximum)
+            soumission.score = score
+            soumission.commentaire = commentaire
+            soumission.statut = SoumissionDevoir.CORRIGE
+            # Seuls ces champs : la note proposée écrite par le worker n'est jamais écrasée.
+            soumission.save(update_fields=['score', 'commentaire', 'statut'])
         if soumission.score != avant:
             audit_log(
                 request, 'saisie_note' if avant is None else 'modification_note', cible=soumission,

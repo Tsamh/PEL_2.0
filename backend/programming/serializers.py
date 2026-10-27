@@ -9,9 +9,9 @@ from quiz import fenetres, validation
 from quiz.acces import CLES_CIBLES, verifier_cibles
 from quiz.exceptions import Conflit
 from quiz.models import TagQuestion
-from .execution import BUDGET_TESTS_MS
+from .execution import BUDGET_TESTS_MS, texte_stockable
 from .execution.langages import nom_refuse
-from .models import CasDeTest, Devoir, Exercice, SoumissionDevoir, NoteMatiere
+from .models import CasDeTest, Devoir, Execution, Exercice, SoumissionDevoir, NoteMatiere
 from .validation import PROFIL_DEVOIR, exercices_modifies
 
 MESSAGE_VERROU = "Ce devoir a déjà des soumissions : ses exercices et ses tests ne peuvent plus être modifiés."
@@ -24,13 +24,21 @@ FICHIERS_MAX = 20
 NOM_FICHIER_MAX = 100
 CONTENU_FICHIER_MAX = 100000
 EXEMPLES_MAX = 20
-LIMITE_TEMPS_DEFAUT_MS = 2000
+NON_AUTORISE = "caractère nul ou non encodable"
 # Un champ texte PostgreSQL refuse le caractère NUL ; un demi-codet isolé ne s'encode pas en UTF-8.
 NON_STOCKABLES = re.compile('[\x00\ud800-\udfff]')
 
 
 def contient_non_stockable(texte):
     return isinstance(texte, str) and NON_STOCKABLES.search(texte) is not None
+
+
+def fichiers_affichables(fichiers):
+    """Fichiers enregistrés rendus sûrs pour le JSON : une donnée ancienne non encodable ne casse aucune page."""
+    if not isinstance(fichiers, list):
+        return []
+    return [{'nom': texte_stockable(f.get('nom')), 'contenu': texte_stockable(f.get('contenu'))}
+            for f in fichiers if isinstance(f, dict)]
 
 
 def _texte(valeur, defaut=''):
@@ -74,7 +82,7 @@ def valider_fichiers(valeur):
         nom, contenu = _texte(fichier.get('nom')), _texte(fichier.get('contenu'))
         nom = nom.strip() if nom is not None else ''
         # Même règle que le service d'exécution : un nom simple, valable sous Linux comme sous Windows.
-        if len(nom) > NOM_FICHIER_MAX or nom_refuse(nom):
+        if len(nom) > NOM_FICHIER_MAX or contient_non_stockable(nom) or nom_refuse(nom):
             raise serializers.ValidationError(
                 f"Un nom de fichier compte de 1 à {NOM_FICHIER_MAX} caractères, sans chemin (« / », « \\ »), "
                 "caractère spécial ni point final, et n'est pas un nom réservé (CON, NUL, COM1...).")
@@ -82,7 +90,7 @@ def valider_fichiers(valeur):
             raise serializers.ValidationError(
                 f"Le contenu du fichier {nom} doit être un texte d'au plus {CONTENU_FICHIER_MAX} caractères.")
         if contient_non_stockable(contenu):
-            raise serializers.ValidationError(f"Le contenu du fichier {nom} contient un caractère non autorisé (NUL).")
+            raise serializers.ValidationError(f"Le contenu du fichier {nom} contient un caractère non autorisé ({NON_AUTORISE}).")
         if nom.casefold() in noms:
             raise serializers.ValidationError(f"Deux fichiers portent le nom {nom}.")
         noms.add(nom.casefold())
@@ -153,7 +161,7 @@ class ExerciceSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         # Borne du service d'exécution : une correction exécute tous les tests dans un budget global.
-        limite = attrs.get('limite_temps_ms', LIMITE_TEMPS_DEFAUT_MS)
+        limite = attrs.get('limite_temps_ms', Exercice._meta.get_field('limite_temps_ms').default)
         nombre = len(attrs.get('tests') or [])
         if nombre * limite > BUDGET_TESTS_MS:
             raise serializers.ValidationError({'tests': [
@@ -411,12 +419,14 @@ def resultat_complet(resultat, execution):
     }
 
 
-def resultat_etudiant(resultat):
+def resultat_etudiant(resultat, execution):
     """Résultat d'un test vu par l'étudiant : jamais l'entrée ni la sortie attendue d'un test caché."""
     cas = resultat.cas
-    if cas is None:  # essai libre (Run) : sa propre entrée
-        return {'statut': resultat.statut, 'temps_ms': resultat.temps_ms, 'sortie': resultat.sortie,
-                'erreurs': resultat.erreurs}
+    if cas is None:
+        if execution.type == Execution.ESSAI_RUN:  # essai libre : sa propre entrée, sa sortie
+            return {'statut': resultat.statut, 'temps_ms': resultat.temps_ms, 'sortie': resultat.sortie,
+                    'erreurs': resultat.erreurs}
+        return {'statut': resultat.statut, 'temps_ms': resultat.temps_ms}
     if cas.public:
         return {'statut': resultat.statut, 'temps_ms': resultat.temps_ms, 'entree': cas.entree,
                 'sortie_attendue': cas.sortie_attendue, 'sortie': resultat.sortie}
@@ -429,8 +439,31 @@ def execution_donnees(execution, complet):
     return {
         'id': execution.id, 'type': execution.type, 'statut': execution.statut, 'message': execution.message,
         'compilation': execution.compilation,
-        'resultats': [resultat_complet(r, execution) if complet else resultat_etudiant(r) for r in resultats],
+        'resultats': [resultat_complet(r, execution) if complet else resultat_etudiant(r, execution) for r in resultats],
     }
+
+
+ATTRIBUT_CORRECTIONS = 'corrections_prechargees'
+
+
+def derniere_correction_prechargee(reponse):
+    """Dernière correction d'une réponse, lue dans le préchargement de la liste (sinon une requête)."""
+    corrections = getattr(reponse, ATTRIBUT_CORRECTIONS, None)
+    if corrections is None:
+        from .execution.notation import derniere_correction
+        return derniere_correction(reponse)
+    return corrections[0] if corrections else None
+
+
+def resume_correction(execution):
+    """Résumé pour la liste des soumissions : statut et nombre de tests par statut, sans aucune sortie."""
+    if execution is None:
+        return None
+    compteurs = {}
+    for resultat in execution.resultats.all():
+        compteurs[resultat.statut] = compteurs.get(resultat.statut, 0) + 1
+    return {'id': execution.id, 'statut': execution.statut, 'message': execution.message,
+            'nombre_tests': sum(compteurs.values()), 'compteurs': compteurs}
 
 
 def resultats_visibles_etudiant(soumission):
@@ -456,14 +489,21 @@ class SoumissionDevoirSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'etudiant', 'statut', 'score', 'note_proposee', 'commentaire', 'date_soumission']
 
     def correction(self, reponse):
+        if self.context.get('resume'):
+            return resume_correction(derniere_correction_prechargee(reponse))
         from .execution.notation import derniere_correction
         derniere = derniere_correction(reponse)
         return execution_donnees(derniere, complet=True) if derniere is not None else None
 
     def get_reponses(self, soumission):
-        return [{'exercice': r.exercice_id, 'exercice_titre': r.exercice.titre, 'fichiers': r.fichiers,
-                 'correction': self.correction(r)}
+        return [{'exercice': r.exercice_id, 'exercice_titre': r.exercice.titre,
+                 'fichiers': fichiers_affichables(r.fichiers), 'correction': self.correction(r)}
                 for r in soumission.reponses.all()]
+
+    def to_representation(self, soumission):
+        donnees = super().to_representation(soumission)
+        donnees['commentaire'] = texte_stockable(donnees.get('commentaire'))
+        return donnees
 
 
 class SoumissionDevoirEtudiantSerializer(serializers.ModelSerializer):
@@ -498,7 +538,7 @@ class SoumissionDevoirEtudiantSerializer(serializers.ModelSerializer):
         return str(soumission.note_proposee)
 
     def get_commentaire(self, soumission):
-        return soumission.commentaire if soumission.statut == SoumissionDevoir.CORRIGE else ''
+        return texte_stockable(soumission.commentaire) if soumission.statut == SoumissionDevoir.CORRIGE else ''
 
     def correction(self, reponse, visible):
         from .execution.notation import derniere_correction
@@ -509,8 +549,8 @@ class SoumissionDevoirEtudiantSerializer(serializers.ModelSerializer):
 
     def get_reponses(self, soumission):
         visible = resultats_visibles_etudiant(soumission)
-        return [{'exercice': r.exercice_id, 'exercice_titre': r.exercice.titre, 'fichiers': r.fichiers,
-                 'correction': self.correction(r, visible)}
+        return [{'exercice': r.exercice_id, 'exercice_titre': r.exercice.titre,
+                 'fichiers': fichiers_affichables(r.fichiers), 'correction': self.correction(r, visible)}
                 for r in soumission.reponses.all()]
 
 
