@@ -12,9 +12,14 @@ Contrat d'un exécuteur :
     (un résultat par cas, dans l'ordre ; `resultats` vide si la compilation échoue)
     Lève ServiceIndisponible si Docker est absent ou en panne, FichierInvalide pour un nom refusé.
 """
+import re
 
 MESSAGE_INDISPONIBLE = "Le service d'exécution est indisponible."
 TAILLE_MAX_SORTIE = 64 * 1024
+
+# Un champ texte PostgreSQL refuse le caractère NUL ; un demi-codet UTF-16 isolé ne s'encode pas en UTF-8.
+_NON_STOCKABLES = re.compile('[\x00\ud800-\udfff]')
+REMPLACEMENT = '\ufffd'
 
 
 class ServiceIndisponible(Exception):
@@ -25,6 +30,15 @@ class FichierInvalide(ValueError):
     """Nom de fichier refusé (chemin, doublon, caractère interdit)."""
 
 
+def texte_stockable(texte):
+    """Texte enregistrable sous SQLite comme sous PostgreSQL : NUL et demi-codets deviennent U+FFFD."""
+    if texte is None:
+        return ''
+    if not isinstance(texte, str):
+        texte = str(texte)
+    return _NON_STOCKABLES.sub(REMPLACEMENT, texte)
+
+
 def tronquer(texte, taille=TAILLE_MAX_SORTIE):
-    texte = texte or ''
-    return texte[:taille]
+    """Texte borné à `taille` caractères et enregistrable (voir `texte_stockable`)."""
+    return texte_stockable(texte or '')[:taille]

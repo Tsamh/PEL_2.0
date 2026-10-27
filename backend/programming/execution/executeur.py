@@ -72,42 +72,60 @@ def _terminer(execution, statut, message='', compilation='', resultats=()):
         execution.resultats.all().delete()
         ResultatTest.objects.bulk_create(resultats)
         execution.statut = statut
-        execution.message = message
+        execution.message = tronquer(message)
         execution.compilation = tronquer(compilation)
         execution.fin = timezone.now()
         execution.save(update_fields=['statut', 'message', 'compilation', 'fin'])
+
+
+def _terminer_en_erreur(execution, message):
+    """Enregistre l'échec ; si l'enregistrement lui-même échoue (base indisponible), l'exception remonte et
+    l'exécution, restée en cours, est reprise par la récupération des exécutions bloquées."""
+    from programming.models import Execution
+    _terminer(execution, Execution.ERREUR, message=message)
 
 
 def executer(execution):
     """Exécute `execution` avec l'exécuteur choisi par PEL_EXECUTEUR et enregistre le résultat.
 
     Statut final `terminee` (avec un ResultatTest par cas) ou `erreur` (avec un message). Ne lève pas
-    pour une panne du service : elle est enregistrée (« Le service d'exécution est indisponible. »).
+    pour une panne du service ni pour un résultat impossible à enregistrer : l'exécution passe en
+    `erreur` avec « Le service d'exécution est indisponible. ».
     """
-    from programming.models import Execution, ResultatTest
+    from programming.models import Execution
     langage = execution.devoir.langage
     if langage not in langages.LANGAGES:
-        _terminer(execution, Execution.ERREUR, message=MESSAGE_LANGAGE)
+        _terminer_en_erreur(execution, MESSAGE_LANGAGE)
         return
-    cas = _cas(execution)
-    fichiers = _fichiers(execution)
-    exercice = execution.exercice
-    probleme = langages.probleme_fichiers(langage, fichiers)
-    if probleme:
-        rapport = {'compilation_ok': False, 'compilation': probleme, 'resultats': []}
-    else:
-        try:
+    try:
+        cas = _cas(execution)
+        fichiers = _fichiers(execution)
+        exercice = execution.exercice
+        probleme = langages.probleme_fichiers(langage, fichiers)
+        if probleme:
+            rapport = {'compilation_ok': False, 'compilation': probleme, 'resultats': []}
+        else:
             rapport = obtenir_executeur().lancer(langage, fichiers, [{'entree': e} for _, e, _ in cas],
                                                  exercice.limite_temps_ms, exercice.limite_memoire_mo)
-        except ServiceIndisponible as erreur:
-            logger.warning("Service d'exécution indisponible pour l'exécution %s : %s", execution.pk, erreur)
-            _terminer(execution, Execution.ERREUR, message=MESSAGE_INDISPONIBLE)
-            return
-        except Exception:  # noqa: BLE001 : toute panne de l'exécuteur est une erreur du service
-            logger.exception("Panne de l'exécuteur pour l'exécution %s", execution.pk)
-            _terminer(execution, Execution.ERREUR, message=MESSAGE_INDISPONIBLE)
-            return
+    except ServiceIndisponible as erreur:
+        logger.warning("Service d'exécution indisponible pour l'exécution %s : %s", execution.pk, erreur)
+        _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
+        return
+    except Exception:  # noqa: BLE001 : toute panne de l'exécuteur est une erreur du service
+        logger.exception("Panne de l'exécuteur pour l'exécution %s", execution.pk)
+        _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
+        return
 
+    try:
+        _terminer(execution, Execution.TERMINEE, compilation=rapport.get('compilation') or '',
+                  resultats=_resultats(execution, cas, rapport))
+    except Exception:  # noqa: BLE001 : un résultat impossible à enregistrer ne doit pas laisser l'exécution en cours
+        logger.exception("Enregistrement des résultats impossible pour l'exécution %s", execution.pk)
+        _terminer_en_erreur(execution, MESSAGE_INDISPONIBLE)
+
+
+def _resultats(execution, cas, rapport):
+    from programming.models import ResultatTest
     compilation_ok = bool(rapport.get('compilation_ok'))
     bruts = rapport.get('resultats') or []
     resultats = []
@@ -119,4 +137,4 @@ def executer(execution):
             temps_ms=max(0, int((brut or {}).get('temps_ms') or 0)),
             sortie=tronquer((brut or {}).get('sortie')), erreurs=tronquer((brut or {}).get('erreurs')),
         ))
-    _terminer(execution, Execution.TERMINEE, compilation=rapport.get('compilation') or '', resultats=resultats)
+    return resultats

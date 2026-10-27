@@ -1,4 +1,8 @@
-"""Langages pris en charge : image, fichier principal, compilation et lancement."""
+"""Langages pris en charge : image, fichier principal, compilation et lancement.
+
+La compilation écrit dans /build, un tmpfs de taille bornée inscriptible seulement pendant la compilation,
+puis monté en lecture seule pour les tests (voir docker.py).
+"""
 from dataclasses import dataclass
 
 from django.conf import settings
@@ -13,7 +17,14 @@ IMAGES_PAR_DEFAUT = {
     'java': 'eclipse-temurin:21-jdk',
 }
 
-CARACTERES_INTERDITS = ('/', '\\', ':', '\x00')
+DOSSIER_COMPILATION = '/build'
+LONGUEUR_MAX_NOM = 100
+# Séparateurs de chemin, caractères refusés par Windows et caractères de contrôle : la validation ne dépend
+# pas du système de l'hôte.
+CARACTERES_INTERDITS = frozenset('/\\:*?"<>|\x7f') | frozenset(chr(i) for i in range(32))
+# Noms réservés de Windows, avec ou sans extension (`CON`, `nul.txt`, `Com1.c`), quelle que soit la casse.
+NOMS_RESERVES = frozenset({'CON', 'PRN', 'AUX', 'NUL'} | {f'COM{i}' for i in range(1, 10)}
+                          | {f'LPT{i}' for i in range(1, 10)})
 
 
 @dataclass(frozen=True)
@@ -27,9 +38,9 @@ class Langage:
 LANGAGES = {
     'python': Langage('python', 'main.py', None, ('python3', '-B', 'main.py')),
     'javascript': Langage('javascript', 'main.js', None, ('node', 'main.js')),
-    'c': Langage('c', 'main.c', ('gcc', '-O2', '-o', '/tmp/prog', 'main.c', '-lm'), ('/tmp/prog',)),
-    'cpp': Langage('cpp', 'main.cpp', ('g++', '-O2', '-o', '/tmp/prog', 'main.cpp'), ('/tmp/prog',)),
-    'java': Langage('java', 'Main.java', ('javac', '-d', '/tmp', 'Main.java'), ('java', '-cp', '/tmp', 'Main')),
+    'c': Langage('c', 'main.c', ('gcc', '-O2', '-o', '/build/prog', 'main.c', '-lm'), ('/build/prog',)),
+    'cpp': Langage('cpp', 'main.cpp', ('g++', '-O2', '-o', '/build/prog', 'main.cpp'), ('/build/prog',)),
+    'java': Langage('java', 'Main.java', ('javac', '-d', '/build', 'Main.java'), ('java', '-cp', '/build', 'Main')),
 }
 
 
@@ -50,7 +61,7 @@ def tas_java_mo(limite_memoire_mo):
     """Tas maximal de la JVM : la limite moins une marge pour la mémoire hors tas (au moins la moitié, 8 Mo minimum).
 
     Un dépassement du tas fait sortir la JVM (`ExitOnOutOfMemoryError`), ce qui est lu comme MLE ;
-    un dépassement de la limite du conteneur est tué par le noyau (code 137), lu aussi comme MLE.
+    un dépassement de la limite du conteneur est tué par le noyau (code 137 avec OOMKilled), lu aussi comme MLE.
     """
     return max(8, limite_memoire_mo // 2, limite_memoire_mo - 64)
 
@@ -59,23 +70,39 @@ def commande_lancement(cle, limite_memoire_mo):
     config = langage(cle)
     if cle == 'java':
         return ['java', f'-Xmx{tas_java_mo(limite_memoire_mo)}m', '-XX:+UseSerialGC', '-XX:TieredStopAtLevel=1',
-                '-XX:+ExitOnOutOfMemoryError', '-XX:-UsePerfData', '-cp', '/tmp', 'Main']
+                '-XX:+ExitOnOutOfMemoryError', '-XX:-UsePerfData', '-cp', DOSSIER_COMPILATION, 'Main']
     return list(config.lancement)
 
 
+def nom_refuse(nom):
+    """Vrai si `nom` ne peut pas être un nom de fichier simple, sous Linux comme sous Windows.
+
+    Refusés : vide ou trop long, fait seulement de points (`.`, `..`), séparateur de chemin, caractère de
+    contrôle ou interdit par Windows, point ou espace final (`main.py.` recouvrirait `main.py` sous Windows),
+    nom réservé de Windows avec ou sans extension. `a..b.py` est accepté : sans séparateur de chemin, `..`
+    n'est un composant de chemin que s'il forme le nom entier.
+    """
+    if not isinstance(nom, str) or not nom or len(nom) > LONGUEUR_MAX_NOM:
+        return True
+    if set(nom) == {'.'} or nom[-1] in '. ':
+        return True
+    if any(c in CARACTERES_INTERDITS for c in nom):
+        return True
+    return nom.split('.', 1)[0].rstrip(' ').upper() in NOMS_RESERVES
+
+
 def valider_noms(fichiers):
-    """Refuse un nom vide, avec chemin, `.`/`..`, caractère interdit ou en double. Lève FichierInvalide."""
+    """Refuse un nom refusé par `nom_refuse` ou en double (sans tenir compte de la casse). Lève FichierInvalide."""
     noms = set()
     for fichier in fichiers:
         nom = fichier.get('nom') if isinstance(fichier, dict) else None
-        if (not isinstance(nom, str) or not nom or nom in ('.', '..') or '..' in nom
-                or any(c in nom for c in CARACTERES_INTERDITS) or len(nom) > 100):
+        if nom_refuse(nom):
             raise FichierInvalide(f"Nom de fichier refusé : {nom!r}")
-        if nom in noms:
+        if nom.casefold() in noms:
             raise FichierInvalide(f"Deux fichiers portent le nom {nom}.")
         if not isinstance(fichier.get('contenu', ''), str):
             raise FichierInvalide(f"Le contenu du fichier {nom} doit être un texte.")
-        noms.add(nom)
+        noms.add(nom.casefold())
 
 
 def probleme_fichiers(cle, fichiers):
