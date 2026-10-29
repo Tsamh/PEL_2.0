@@ -22,7 +22,10 @@ Plateforme d'évaluation en ligne multi-établissements combinant quiz (QCM, vra
 Images d'exécution à télécharger une fois (le worker ne les télécharge jamais lui-même) :
 
 ```bash
-docker pull python:3.12-alpine node:20-alpine gcc:13 eclipse-temurin:21-jdk
+docker pull python:3.12-alpine
+docker pull node:20-alpine
+docker pull gcc:13
+docker pull eclipse-temurin:21-jdk
 ```
 
 ### Setup
@@ -76,7 +79,7 @@ cd backend && source ../venv/bin/activate && python manage.py executer_file --wo
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `PEL_EXECUTEUR` | `docker` | `docker` en usage réel ; `factice` seulement pour les tests (aucun code exécuté). |
-| `PEL_IMAGE_PYTHON`, `PEL_IMAGE_JAVASCRIPT`, `PEL_IMAGE_C`, `PEL_IMAGE_CPP`, `PEL_IMAGE_JAVA` | voir `docker pull` ci-dessus | Images Docker par langage (réglage `PEL_IMAGES_EXECUTION`). |
+| `PEL_IMAGE_PYTHON`, `PEL_IMAGE_JAVASCRIPT`, `PEL_IMAGE_C`, `PEL_IMAGE_CPP`, `PEL_IMAGE_JAVA` | voir les `docker pull` ci-dessus | Images Docker par langage (réglage `PEL_IMAGES_EXECUTION`). |
 | `PEL_WORKERS_EXECUTION` | `2` (`1` dans `start.sh`) | Nombre de fils du worker. |
 
 Sans Docker, les essais et les corrections passent en erreur avec le message « Le service d'exécution est indisponible. » ; aucun code n'est exécuté sans isolation. La limite de 20 exécutions par minute utilise le cache Django : avec plusieurs processus web, configurer un cache partagé (Redis ou Memcached).
