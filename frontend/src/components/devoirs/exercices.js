@@ -3,6 +3,10 @@
 export const LANGAGES = { python: 'Python', java: 'Java', c: 'C', cpp: 'C++', javascript: 'JavaScript', autre: 'Autre' };
 export const DIFFICULTES = { facile: 'Facile', moyen: 'Moyen', difficile: 'Difficile' };
 
+// Limites d'exécution par exercice (spec 4b) et plafond du nombre de tests × limite de temps.
+export const LIMITES = { temps: { defaut: 2000, min: 100, max: 10000 }, memoire: { defaut: 256, min: 16, max: 512 } };
+export const BUDGET_TESTS_MS = 140000;
+
 const EXTENSIONS = { python: 'py', javascript: 'js', c: 'c', cpp: 'cpp', java: 'java', autre: 'txt' };
 const EXTENSIONS_CONNUES = new Set(Object.values(EXTENSIONS));
 
@@ -22,6 +26,7 @@ export const nouvelExercice = (langage) => ({
   fichiers_initiaux: [{ nom: nomFichier(langage), contenu: '' }],
   solution: [{ nom: nomFichier(langage), contenu: '' }],
   points: 1, difficulte: 'moyen', competences: [], tests: [nouveauTest()],
+  limite_temps_ms: LIMITES.temps.defaut, limite_memoire_mo: LIMITES.memoire.defaut,
 });
 
 const copieFichiers = (fichiers) => (fichiers || []).map((f) => ({ nom: f.nom, contenu: f.contenu }));
@@ -34,6 +39,7 @@ export const depuisApi = (e) => ({
   fichiers_initiaux: copieFichiers(e.fichiers_initiaux),
   solution: copieFichiers(e.solution),
   points: e.points, difficulte: e.difficulte || 'moyen', competences: e.competences || [],
+  limite_temps_ms: e.limite_temps_ms ?? LIMITES.temps.defaut, limite_memoire_mo: e.limite_memoire_mo ?? LIMITES.memoire.defaut,
   competences_detail: e.competences_detail || [],
   tests: (e.tests || []).map((t) => ({ entree: t.entree, sortie_attendue: t.sortie_attendue, public: t.public, poids: t.poids })),
 });
@@ -57,6 +63,8 @@ export const versPayload = (exercices) => exercices.map((e, i) => ({
   fichiers_initiaux: copieFichiers(e.fichiers_initiaux),
   solution: copieFichiers(e.solution),
   points: e.points, difficulte: e.difficulte, competences: e.competences,
+  limite_temps_ms: Number(e.limite_temps_ms) || LIMITES.temps.defaut,
+  limite_memoire_mo: Number(e.limite_memoire_mo) || LIMITES.memoire.defaut,
   tests: e.tests.map((t, j) => ({
     ordre: j + 1, entree: t.entree, sortie_attendue: t.sortie_attendue, public: Boolean(t.public), poids: Number(t.poids) || 1,
   })),

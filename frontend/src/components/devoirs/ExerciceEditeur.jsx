@@ -1,5 +1,5 @@
 import CodeEditor from '../CodeEditor';
-import { DIFFICULTES, avecContenuPrincipal, contenuPrincipal, nouveauTest, nouvelExemple } from './exercices';
+import { BUDGET_TESTS_MS, DIFFICULTES, LIMITES, avecContenuPrincipal, contenuPrincipal, nouveauTest, nouvelExemple } from './exercices';
 
 const styleBloc = { border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '16px', marginBottom: '12px', background: 'var(--gray-50, #f9fafb)' };
 const styleSousBloc = { border: '1px solid var(--gray-200)', borderRadius: '6px', padding: '8px', marginBottom: '8px', background: 'white' };
@@ -29,6 +29,7 @@ export default function ExerciceEditeur({ exercice: e, index, langage, competenc
   // Compétences déjà liées mais absentes de la liste chargée : affichées pour pouvoir les retirer.
   const connues = new Set(competences.map((c) => c.id));
   const toutes = [...competences, ...(e.competences_detail || []).filter((c) => e.competences.includes(c.id) && !connues.has(c.id))];
+  const budget = e.tests.length * (Number(e.limite_temps_ms) || 0);
 
   return (
     <div style={styleBloc}>
@@ -65,6 +66,25 @@ export default function ExerciceEditeur({ exercice: e, index, langage, competenc
           </select>
         </div>
       </div>
+      <div className="form-row">
+        <div className="form-group">
+          <label>Limite de temps par test (ms)</label>
+          <input type="number" step="1" min={LIMITES.temps.min} max={LIMITES.temps.max} value={e.limite_temps_ms}
+            onChange={(ev) => onChange({ limite_temps_ms: ev.target.value })} required />
+          <small style={styleNote}>De {LIMITES.temps.min} à {LIMITES.temps.max} ms (défaut {LIMITES.temps.defaut}).</small>
+        </div>
+        <div className="form-group">
+          <label>Limite de mémoire (Mo)</label>
+          <input type="number" step="1" min={LIMITES.memoire.min} max={LIMITES.memoire.max} value={e.limite_memoire_mo}
+            onChange={(ev) => onChange({ limite_memoire_mo: ev.target.value })} required />
+          <small style={styleNote}>De {LIMITES.memoire.min} à {LIMITES.memoire.max} Mo (défaut {LIMITES.memoire.defaut}).</small>
+        </div>
+      </div>
+      {budget > BUDGET_TESTS_MS && (
+        <div className="alert alert-error">
+          {e.tests.length} tests de {Number(e.limite_temps_ms)} ms dépassent le plafond de {BUDGET_TESTS_MS / 1000} s par exercice : réduisez la limite de temps ou le nombre de tests.
+        </div>
+      )}
 
       <div className="form-group">
         <label>Compétences</label>

@@ -8,11 +8,13 @@ import CodeEditor from '../../components/CodeEditor';
 import CountdownTimer from '../../components/CountdownTimer';
 import ApercuDevoir, { Exemples, ListeRessources, TableTests } from '../../components/devoirs/ApercuDevoir';
 import { DIFFICULTES, LANGAGES, avecContenuPrincipal, contenuPrincipal, nomFichier } from '../../components/devoirs/exercices';
+import ResultatsExecution from '../../components/devoirs/ResultatsExecution';
+import { STATUTS_SOUMISSION, executionActive } from '../../components/devoirs/statuts';
 
 const formatDate = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }) : '');
 const styleTexte = { whiteSpace: 'pre-wrap', color: 'var(--gray-700)', margin: '4px 0' };
 const styleNote = { fontSize: '0.85rem', color: 'var(--gray-500)' };
-const stylePre = { background: 'var(--gray-900, #1a1a1a)', color: '#e2e8f0', padding: '12px', borderRadius: '8px', overflow: 'auto', fontFamily: 'monospace', fontSize: '0.85rem', maxHeight: '200px', whiteSpace: 'pre-wrap' };
+const styleCode = { fontFamily: 'monospace', width: '100%' };
 
 // Fichiers de travail d'un exercice : copie des fichiers de départ (un fichier principal au moins).
 const fichiersDeDepart = (exercice, langage) => {
@@ -22,6 +24,10 @@ const fichiersDeDepart = (exercice, langage) => {
 
 // Avance de la soumission automatique sur l'heure de fermeture effective.
 const AVANCE_AUTO_MS = 30000;
+// Interrogation d'un essai en cours, et d'une soumission en cours de correction.
+const INTERVALLE_ESSAI_MS = 1000;
+const INTERVALLE_CORRECTION_MS = 3000;
+const MESSAGE_EN_COURS = 'Une exécution est déjà en cours.';
 
 // Brouillon du code d'un exercice, gardé le temps de l'onglet (le stockage peut être indisponible).
 const cleBrouillon = (devoirId, exerciceId) => `pel-brouillon-devoir-${devoirId}-${exerciceId}`;
@@ -38,41 +44,6 @@ const ecrireBrouillon = (devoirId, exerciceId, fichiers) => {
 const effacerBrouillons = (devoirId, exercices) => {
   try { exercices.forEach((ex) => window.sessionStorage.removeItem(cleBrouillon(devoirId, ex.id))); } catch { /* stockage indisponible */ }
 };
-
-function ResultatExecution({ resultat, testsPublics }) {
-  if (resultat.enCours) return <div className="loading">Exécution en cours...</div>;
-  if (resultat.erreur) return <div className="alert alert-error">{resultat.erreur}</div>;
-  const r = resultat.donnees;
-  const reussis = (r.test_results || []).filter((t) => t.passed).length;
-  return (
-    <div>
-      <div style={{ display: 'flex', gap: '16px', marginBottom: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-        <span className={`badge ${r.success ? 'badge-active' : 'badge-inactive'}`}>{r.success ? 'Exécution réussie' : 'Erreur'}</span>
-        {r.execution_time && <span style={styleNote}>Durée : {r.execution_time}</span>}
-      </div>
-      {!r.success && r.message && <div className="alert alert-error">{r.message}</div>}
-      {r.output && <div><div style={styleNote}>Sortie</div><pre style={stylePre}>{r.output}</pre></div>}
-      {r.test_results?.length > 0 && (
-        <div>
-          <strong>Tests publics : {reussis} / {r.test_results.length} réussis</strong>
-          <table className="data-table" style={{ fontSize: '0.85rem', marginTop: '6px' }}>
-            <thead><tr><th>#</th><th>Entrée</th><th>Sortie attendue</th><th>Résultat</th></tr></thead>
-            <tbody>
-              {r.test_results.map((t, i) => (
-                <tr key={i}>
-                  <td>{i + 1}</td>
-                  <td><pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{testsPublics[i]?.entree ?? ''}</pre></td>
-                  <td><pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{testsPublics[i]?.sortie_attendue ?? ''}</pre></td>
-                  <td>{t.passed ? <span className="badge badge-active">Réussi</span> : <span className="badge badge-inactive">Échoué</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function ApercuGestion({ id }) {
   const navigate = useNavigate();
@@ -104,13 +75,26 @@ function DevoirEtudiant({ id }) {
   const [devoir, setDevoir] = useState(null);
   const [soumission, setSoumission] = useState(null);
   const [fichiers, setFichiers] = useState({});
-  const [resultats, setResultats] = useState({});
+  const [essais, setEssais] = useState({});
+  const [entrees, setEntrees] = useState({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const autoLance = useRef(false);
   const envoiRef = useRef(null);
+  const minuteurs = useRef({});
+
+  // Toute interrogation s'arrête au démontage de la page.
+  useEffect(() => {
+    const actifs = minuteurs.current;
+    return () => Object.values(actifs).forEach(clearTimeout);
+  }, []);
+
+  const planifier = (cle, fonction, delai) => {
+    clearTimeout(minuteurs.current[cle]);
+    minuteurs.current[cle] = setTimeout(fonction, delai);
+  };
 
   const charger = useCallback(async () => {
     try {
@@ -180,6 +164,25 @@ function DevoirEtudiant({ id }) {
     return () => clearTimeout(minuteur);
   }, [peutSoumettreAuto, fermeture]);
 
+  // Soumission en cours de correction : relue jusqu'à la fin de la correction automatique.
+  const soumissionId = soumission?.id;
+  const enCorrection = soumission?.statut === 'en_correction';
+  useEffect(() => {
+    if (!soumissionId || !enCorrection) return undefined;
+    const relire = async () => {
+      try {
+        const res = await api.get(`/programming/soumissions/${soumissionId}/`);
+        setSoumission(res.data);
+        if (res.data.statut === 'en_correction') planifier('soumission', relire, INTERVALLE_CORRECTION_MS);
+      } catch {
+        planifier('soumission', relire, INTERVALLE_CORRECTION_MS * 3);
+      }
+    };
+    planifier('soumission', relire, INTERVALLE_CORRECTION_MS);
+    const actifs = minuteurs.current;
+    return () => clearTimeout(actifs.soumission);
+  }, [soumissionId, enCorrection]);
+
   if (loading) return <div className="loading">Chargement...</div>;
   if (!devoir) return <div className="alert alert-error">{error}</div>;
 
@@ -188,13 +191,36 @@ function DevoirEtudiant({ id }) {
   const editable = Boolean(etat.ouvert) && !soumis;
   const reponses = Object.fromEntries((soumission?.reponses || []).map((r) => [r.exercice, r.fichiers]));
 
-  const executer = async (exercice) => {
-    setResultats((r) => ({ ...r, [exercice.id]: { enCours: true } }));
+  const executable = devoir.langage !== 'autre';
+  // Une seule exécution à la fois par utilisateur : les boutons de tous les exercices attendent la fin.
+  const essaiActif = Object.values(essais).some((e) => e.envoi || (e.execution && executionActive(e.execution.statut)));
+  const majEssai = (exerciceId, valeur) => setEssais((e) => ({ ...e, [exerciceId]: valeur }));
+
+  const suivre = (exerciceId, executionId) => {
+    const relire = async () => {
+      try {
+        const res = await api.get(`/programming/executions/${executionId}/`);
+        majEssai(exerciceId, { execution: res.data });
+        if (executionActive(res.data.statut)) planifier(`essai-${exerciceId}`, relire, INTERVALLE_ESSAI_MS);
+      } catch (err) {
+        majEssai(exerciceId, { erreur: messageErreur(err, "Erreur lors de la lecture du résultat de l'exécution.") });
+      }
+    };
+    planifier(`essai-${exerciceId}`, relire, INTERVALLE_ESSAI_MS);
+  };
+
+  const executer = async (exercice, mode) => {
+    majEssai(exercice.id, { envoi: true });
     try {
-      const res = await api.post(`/programming/devoirs/${id}/execute/`, { exercice: exercice.id, code: contenuPrincipal(fichiers[exercice.id]) });
-      setResultats((r) => ({ ...r, [exercice.id]: { donnees: res.data } }));
+      const corps = { exercice: exercice.id, fichiers: fichiers[exercice.id], mode };
+      if (mode === 'run') corps.entree = entrees[exercice.id] || '';
+      const res = await api.post(`/programming/devoirs/${id}/executer/`, corps);
+      majEssai(exercice.id, { execution: { ...res.data, type: mode === 'run' ? 'essai_run' : 'essai_test' } });
+      suivre(exercice.id, res.data.id);
     } catch (err) {
-      setResultats((r) => ({ ...r, [exercice.id]: { erreur: messageErreur(err, "Erreur lors de l'exécution.") } }));
+      majEssai(exercice.id, { erreur: messageErreur(err, "Erreur lors de l'exécution.") });
+      // Fenêtre fermée ou année archivée entre-temps : l'état affiché est relu.
+      if (err.response?.status === 409 && err.response?.data?.detail !== MESSAGE_EN_COURS) charger();
     }
   };
 
@@ -206,6 +232,12 @@ function DevoirEtudiant({ id }) {
     else messageFenetre = 'Ce devoir est fermé.';
   }
   const aUneNote = soumission && soumission.score !== null && soumission.score !== undefined;
+  const aUneNoteProposee = !aUneNote && soumission?.note_proposee !== null && soumission?.note_proposee !== undefined;
+  const corrections = Object.fromEntries((soumission?.reponses || []).map((r) => [r.exercice, r.correction]));
+  let etatCorrection = '';
+  if (soumission?.statut === 'en_correction') etatCorrection = 'La correction automatique de votre code est en cours.';
+  else if (soumission?.statut === 'corrigee_auto' && !soumission.resultats_visibles) etatCorrection = "La correction automatique est terminée : les résultats seront visibles après validation par l'enseignant.";
+  else if (soumission?.statut === 'soumis') etatCorrection = "Votre devoir sera corrigé par l'enseignant.";
 
   return (
     <div>
@@ -240,11 +272,18 @@ function DevoirEtudiant({ id }) {
           <h3>Votre soumission</h3>
           <div>
             <span className={`badge ${soumission?.statut === 'corrige' ? 'badge-active' : 'badge-inactive'}`}>
-              {soumission?.statut === 'corrige' ? 'Corrigé' : 'Soumis'}
+              {STATUTS_SOUMISSION[soumission?.statut] || 'Soumis'}
             </span>
             {soumission?.date_soumission && <span style={{ ...styleNote, marginLeft: '12px' }}>Rendu le {formatDate(soumission.date_soumission)}</span>}
             {aUneNote && <span style={{ marginLeft: '12px', fontWeight: 600, fontSize: '1.1rem' }}>Note : {soumission.score} / {Number(soumission.bareme ?? devoir.bareme)}</span>}
+            {aUneNoteProposee && (
+              <span style={{ marginLeft: '12px', fontWeight: 600, fontSize: '1.1rem' }}>
+                Note proposée : {Number(soumission.note_proposee)} / {Number(soumission.bareme ?? devoir.bareme)}
+                <span style={{ ...styleNote, fontWeight: 'normal', marginLeft: '6px' }}>(en attente de validation)</span>
+              </span>
+            )}
           </div>
+          {etatCorrection && <p style={{ ...styleNote, marginTop: '8px' }}>{etatCorrection}</p>}
           {soumission?.commentaire && (
             <div style={{ marginTop: '12px', padding: '12px', background: 'var(--primary-50, #eff6ff)', borderRadius: '8px', borderLeft: '4px solid var(--primary)' }}>
               <strong style={{ color: 'var(--primary)' }}>Remarques de l'enseignant :</strong>
@@ -286,17 +325,37 @@ function DevoirEtudiant({ id }) {
               )}
             </div>
 
-            {editable && (
+            {editable && executable && (
               <div style={{ marginTop: '12px' }}>
-                <button type="button" className="btn btn-secondary" onClick={() => executer(ex)}
-                  disabled={resultats[ex.id]?.enCours || !contenuPrincipal(fichiers[ex.id]).trim()}>
-                  {resultats[ex.id]?.enCours ? 'Exécution...' : 'Exécuter'}
-                </button>
-                {ex.tests_publics?.length > 0 && <span style={{ ...styleNote, marginLeft: '8px' }}>Le code est exécuté sur les tests publics de l'exercice.</span>}
+                <div className="form-group" style={{ marginBottom: '8px' }}>
+                  <label style={styleNote}>Entrée (lue sur l'entrée standard par « Exécuter »)</label>
+                  <textarea style={styleCode} rows={2} value={entrees[ex.id] || ''}
+                    onChange={(ev) => setEntrees((e) => ({ ...e, [ex.id]: ev.target.value }))} />
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button type="button" className="btn btn-secondary" onClick={() => executer(ex, 'run')}
+                    disabled={essaiActif || !contenuPrincipal(fichiers[ex.id]).trim()}>Exécuter</button>
+                  <button type="button" className="btn btn-secondary" onClick={() => executer(ex, 'test')}
+                    disabled={essaiActif || !ex.tests_publics?.length || !contenuPrincipal(fichiers[ex.id]).trim()}>Tester</button>
+                  <span style={styleNote}>
+                    {ex.tests_publics?.length > 0 ? "« Tester » lance le code sur les tests publics de l'exercice." : "Cet exercice n'a pas de test public."}
+                  </span>
+                </div>
               </div>
             )}
-            {editable && resultats[ex.id] && (
-              <div style={{ marginTop: '12px' }}><ResultatExecution resultat={resultats[ex.id]} testsPublics={ex.tests_publics || []} /></div>
+            {editable && essais[ex.id] && (
+              <div style={{ marginTop: '12px' }}>
+                <strong>Console</strong>
+                {essais[ex.id].envoi && <div className="loading">Envoi...</div>}
+                {essais[ex.id].erreur && <div className="alert alert-error">{essais[ex.id].erreur}</div>}
+                <ResultatsExecution execution={essais[ex.id].execution} />
+              </div>
+            )}
+            {soumis && corrections[ex.id] && (
+              <div style={{ marginTop: '12px' }}>
+                <strong>Résultats de la correction</strong>
+                <ResultatsExecution execution={corrections[ex.id]} />
+              </div>
             )}
           </div>
         );
