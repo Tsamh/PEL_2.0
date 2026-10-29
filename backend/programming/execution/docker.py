@@ -40,8 +40,10 @@ exécutions bloquées). Chaque appel au client docker a un délai côté hôte b
 interrompu par l'épuisement du budget et les tests restants (non lancés) sont des dépassements de temps
 (TLE) : le budget couvre toujours la limite de chaque test, il ne s'épuise donc que si le programme dépasse
 ses limites ou si l'exercice cumule plus de 4 minutes de tests. Le conteneur est alors tué par `rm -f`.
-Un `docker exec` qui ne rend pas la main (un processus d'arrière-plan garde la sortie ouverte) est coupé
-côté hôte ; si le conteneur répond encore, le test est un TLE.
+Un processus d'arrière-plan qui garde la sortie ouverte ne bloque pas le test : le démon Docker rend la main
+environ 2 s après la fin du processus principal (code de celui-ci, sortie gardée), et le fils est tué par le
+nettoyage suivant. Un `docker exec` qui ne rend quand même pas la main est coupé côté hôte ; si le conteneur
+répond encore, le test est un TLE.
 
 Statuts : code 124, ou 137 avec un temps mesuré au moins égal à la limite : TLE ; code 137 avec
 `State.OOMKilled` : MLE ; autre 137 (SIGKILL envoyé par le programme lui-même) : erreur d'exécution.

@@ -95,13 +95,20 @@ class DockerReelTests(SimpleTestCase):
         self.assertLessEqual(len(rapport['resultats'][0]['sortie']), 64 * 1024)
 
     def test_processus_d_arriere_plan_qui_garde_la_sortie(self):
-        # Le fils garde stdout ouvert après la fin du père : TLE, puis il est tué avant le test suivant.
+        # Le fils garde stdout ouvert après la fin du père : le démon Docker rend la main environ 2 s après la
+        # fin du père (code 0, sortie gardée), le test est donc jugé sur le père. Le fils est tué par le
+        # nettoyage avant le test suivant, qui vérifie qu'aucun autre processus python ne tourne (le chien de garde
+        # timeout de BusyBox, dont la ligne de commande contient aussi python, est exclu).
         code = ("import os, sys, time\n"
                 "if sys.stdin.read().strip() == 'fond':\n"
                 "    if os.fork() == 0:\n        os.setsid(); time.sleep(600)\n"
-                "print('fin')\n")
+                "    print('fin')\n"
+                "else:\n"
+                "    autres = [p for p in os.listdir('/proc') if p.isdigit() and int(p) != os.getpid()\n"
+                "              and open(f'/proc/{p}/cmdline', 'rb').read().startswith(b'python')]\n"
+                "    print('fin' if not autres else 'fils vivant')\n")
         rapport, statuts = self.statuts('python', 'main.py', code, ['fond', 'normal'], ['fin', 'fin'], temps=1000)
-        self.assertEqual(statuts, ['TLE', 'OK'], rapport)
+        self.assertEqual(statuts, ['OK', 'OK'], rapport)
 
     def test_sortie_avec_nul(self):
         rapport, _ = self.statuts('c', 'main.c', '#include <stdio.h>\nint main(){putchar(97);putchar(0);'
