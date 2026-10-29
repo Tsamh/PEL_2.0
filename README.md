@@ -17,6 +17,16 @@ Plateforme d'évaluation en ligne multi-établissements combinant quiz (QCM, vra
 - Python 3.10+
 - Node.js 18+
 - npm
+- Docker (moteur démarré, utilisable par l'utilisateur qui lance le worker) pour exécuter le code des étudiants
+
+Images d'exécution à télécharger une fois (le worker ne les télécharge jamais lui-même) :
+
+```bash
+docker pull python:3.12-alpine
+docker pull node:20-alpine
+docker pull gcc:13
+docker pull eclipse-temurin:21-jdk
+```
 
 ### Setup
 
@@ -57,7 +67,22 @@ cd backend && source ../venv/bin/activate && python manage.py runserver
 
 # Terminal 2 - Frontend
 cd frontend && npm run dev
+
+# Terminal 3 - Worker d'exécution (file des essais et des corrections)
+cd backend && source ../venv/bin/activate && python manage.py executer_file --workers 1
 ```
+
+`executer_file --une-fois` traite la file puis s'arrête (cron, tests). Avec SQLite, garder `--workers 1`.
+
+### Réglages de l'exécution (`backend/.env`)
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PEL_EXECUTEUR` | `docker` | `docker` en usage réel ; `factice` seulement pour les tests (aucun code exécuté). |
+| `PEL_IMAGE_PYTHON`, `PEL_IMAGE_JAVASCRIPT`, `PEL_IMAGE_C`, `PEL_IMAGE_CPP`, `PEL_IMAGE_JAVA` | voir les `docker pull` ci-dessus | Images Docker par langage (réglage `PEL_IMAGES_EXECUTION`). |
+| `PEL_WORKERS_EXECUTION` | `2` (`1` dans `start.sh`) | Nombre de fils du worker. |
+
+Sans Docker, les essais et les corrections passent en erreur avec le message « Le service d'exécution est indisponible. » ; aucun code n'est exécuté sans isolation. La limite de 20 exécutions par minute utilise le cache Django : avec plusieurs processus web, configurer un cache partagé (Redis ou Memcached).
 
 ## URLs
 
@@ -141,8 +166,10 @@ PEL/
 - Langages : Python, Java, C, C++, JavaScript
 - **Langage imposé** : l'enseignant choisit le langage, l'étudiant ne peut pas le changer
 - **Monaco Editor** intégré (dark theme, syntax highlighting)
-- **Exécution de code** côté serveur (Python/JS, timeout 10s)
-- **Cas de test** avec vérification automatique (entrée → sortie attendue)
+- **Exécution isolée** dans des conteneurs Docker jetables (sans réseau, mémoire, processus et temps limités) pour Python, JavaScript, C, C++ et Java
+- **Limites par exercice** : temps par test (2 000 ms par défaut) et mémoire (256 Mo par défaut)
+- **Cas de test** publics ou cachés, pondérés, comparaison tolérante (espaces de fin de ligne, lignes vides finales)
+- **Politique de résultats** : après validation par l'enseignant (défaut) ou immédiate
 - Code initial fourni aux étudiants (lecture seule)
 - Solution de référence (cachée aux étudiants)
 - Timer avec soumission automatique
@@ -150,16 +177,18 @@ PEL/
 - **Matière (EC) associée** au devoir
 
 ### Exécution de code
-- L'étudiant exécute son code et voit le résultat
-- **Les détails d'erreur sont masqués** (pas de stack trace, juste "Votre code contient des erreurs")
-- Les tests échoués affichent juste "Réussi" / "Échoué" (pas les inputs/outputs)
-- L'enseignant voit les détails complets pour corriger
+- Demandes mises en file et traitées par le worker `executer_file` ; la page interroge le résultat chaque seconde
+- « Exécuter » lance le code avec l'entrée saisie ; « Tester » le lance sur les tests publics
+- Statut par test : Accepté, Erreur de compilation, Erreur d'exécution, Mauvaise réponse, Temps dépassé, Mémoire dépassée, Erreur du service
+- L'étudiant ne reçoit jamais l'entrée ni la sortie attendue d'un test caché ; une exécution à la fois, 20 par minute
 
 ### Corrections
 - Vue des soumissions par devoir
 - Code soumis affiché dans Monaco Editor (read-only)
-- **Notation** (score / points_max) + **remarques** directement visibles par l'étudiant
-- Statistiques : total, corrigées, en attente
+- **Correction automatique** à la soumission : note proposée = somme des (poids des tests cachés réussis / poids des tests cachés) × points
+- **Validation** par l'enseignant : note proposée arrondie ou note ajustée, avec remarques
+- **Relance** des corrections en erreur (ou de toutes)
+- Statistiques : total, validées, à valider, correction en cours
 
 ### Notes par matière
 - **Devoir (manuelle)** : note saisie par le prof via Gestion des notes
@@ -220,9 +249,11 @@ PEL/
 
 ### Programmation
 - `/api/programming/devoirs/` - CRUD devoirs (enseignant : ses devoirs, admin : son établissement)
-- `POST /api/programming/devoirs/{id}/execute/` - Exécuter du code (masque les erreurs aux étudiants)
-- `/api/programming/soumissions/` - Soumissions étudiants
-- `POST /api/programming/soumissions/{id}/corriger/` - Corriger une soumission (score + remarques)
+- `POST /api/programming/devoirs/{id}/executer/` - Essai asynchrone `{exercice, fichiers, mode: run|test, entree}` (202)
+- `GET /api/programming/executions/{id}/` - Statut et résultats d'une exécution
+- `/api/programming/soumissions/` - Soumissions étudiants (correction automatique mise en file)
+- `POST /api/programming/soumissions/{id}/corriger/` - Valider la note (score facultatif : note proposée arrondie) et les remarques
+- `POST /api/programming/soumissions/{id}/recorriger/` - Relancer les corrections en erreur (`{tout: true}` : toutes)
 
 ### Notes
 - `/api/programming/notes/` - CRUD notes par matière

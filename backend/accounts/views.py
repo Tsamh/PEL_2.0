@@ -736,7 +736,8 @@ L'équipe PEL"""
             stats['mes_devoirs'] = Devoir.objects.filter(cree_par=user).count()
             stats['soumissions_recues'] = SoumissionDevoir.objects.filter(devoir__cree_par=user).count()
             stats['soumissions_a_corriger'] = SoumissionDevoir.objects.filter(
-                devoir__cree_par=user, statut='soumis').exclude(devoir__annee_academique__archivee=True).count()
+                devoir__cree_par=user, statut__in=('soumis', 'en_correction', 'corrigee_auto'),
+            ).exclude(devoir__annee_academique__archivee=True).count()
 
         elif user.role == 'etudiant':
             from programming.models import SoumissionDevoir

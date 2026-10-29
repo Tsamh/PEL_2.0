@@ -8,6 +8,7 @@ import SessionsQuiz from '../quiz/SessionsQuiz';
 import StatutValidation from '../quiz/StatutValidation';
 import CaseArchives from '../CaseArchives';
 import ExerciceEditeur from './ExerciceEditeur';
+import { POLITIQUES_RESULTATS } from './statuts';
 import { DIFFICULTES, LANGAGES, depuisApi, nouvelExercice, renommerFichiers, versPayload } from './exercices';
 import { versChampLocal, badgeStatut } from '../evaluations/communs';
 import { useAuth } from '../../context/AuthContext';
@@ -15,7 +16,7 @@ import { useAuth } from '../../context/AuthContext';
 const MESSAGE_VERROU = 'Ce devoir a déjà des soumissions : ses exercices et ses tests ne peuvent plus être modifiés.';
 
 const formulaireVide = {
-  titre: '', objectifs: '', consignes: '', ressources: [], langage: 'python',
+  titre: '', objectifs: '', consignes: '', ressources: [], langage: 'python', politique_resultats: 'apres_validation',
   filiere: '', niveau: '', annee_academique: '', periode: '', ec: '',
   date_debut: '', date_fin: '', est_publie: false,
   classes: [], groupes: [], etudiants: [],
@@ -100,7 +101,7 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
     setForm({
       titre: item.titre, objectifs: item.objectifs || '', consignes: item.consignes || '',
       ressources: (item.ressources || []).map((r) => ({ libelle: r.libelle, url: r.url })),
-      langage: item.langage,
+      langage: item.langage, politique_resultats: item.politique_resultats || 'apres_validation',
       filiere: item.filiere || '', niveau: item.niveau || '', annee_academique: item.annee_academique || '', periode: item.periode || '', ec: item.ec || '',
       date_debut: versChampLocal(item.date_debut), date_fin: versChampLocal(item.date_fin), est_publie: item.est_publie,
       classes: item.classes || [], groupes: item.groupes || [], etudiants: item.etudiants || [],
@@ -225,6 +226,17 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
                       {filieres.map((f) => <option key={f.id} value={f.id}>{f.libelle}</option>)}
                     </select>
                   </div>
+                </div>
+                <div className="form-group">
+                  <label>Résultats montrés aux étudiants</label>
+                  <select value={form.politique_resultats} onChange={(e) => setForm({ ...form, politique_resultats: e.target.value })}>
+                    {Object.entries(POLITIQUES_RESULTATS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                  <small style={styleNote}>
+                    {form.politique_resultats === 'immediate'
+                      ? "L'étudiant voit la note proposée et le statut de chaque test dès la fin de la correction automatique."
+                      : "L'étudiant voit sa note et le statut de chaque test une fois la note validée par l'enseignant."}
+                  </small>
                 </div>
                 <div className="form-row">
                   <div className="form-group">

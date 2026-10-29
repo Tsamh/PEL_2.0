@@ -114,3 +114,14 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 EMAIL_TIMEOUT = 5
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'PEL <noreply@pel.com>')
+
+# Exécution des programmes d'étudiants (sous-projet 4b) : conteneurs Docker jetables, jamais sans isolation.
+PEL_EXECUTEUR = os.getenv('PEL_EXECUTEUR', 'docker')
+PEL_IMAGES_EXECUTION = {
+    'python': os.getenv('PEL_IMAGE_PYTHON', 'python:3.12-alpine'),
+    'javascript': os.getenv('PEL_IMAGE_JAVASCRIPT', 'node:20-alpine'),
+    'c': os.getenv('PEL_IMAGE_C', 'gcc:13'),
+    'cpp': os.getenv('PEL_IMAGE_CPP', 'gcc:13'),
+    'java': os.getenv('PEL_IMAGE_JAVA', 'eclipse-temurin:21-jdk'),
+}
+PEL_WORKERS_EXECUTION = int(os.getenv('PEL_WORKERS_EXECUTION', 2))
