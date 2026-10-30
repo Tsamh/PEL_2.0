@@ -31,10 +31,12 @@ from .serializers import (
     NoteMatiereSerializer, valider_reponses, ATTRIBUT_CORRECTIONS, NON_AUTORISE, contient_non_stockable,
 )
 from .validation import PROFIL_DEVOIR
+from .views_brouillons import BrouillonsMixin
 from .views_execution import ACTIVES, demander_essai, langage_executable
 
 CORRECTEURS = RolePermission(read=CREATEURS, write=CREATEURS)
 MESSAGE_DEJA_SOUMIS = "Vous avez déjà soumis ce devoir."
+MESSAGE_NOTE_VALIDEE = "Votre note est validée : ce devoir ne peut plus être modifié."
 MESSAGE_PAS_OUVERT = "Ce devoir n'est pas ouvert."
 MESSAGE_FERME = "Ce devoir est fermé."
 MESSAGE_SANS_NOTE = "Aucune note proposée : indiquez un score."
@@ -56,7 +58,7 @@ def verifier_fenetre_ouverte(devoir, etudiant):
         raise Conflit(MESSAGE_PAS_OUVERT if fenetre.prochaine_ouverture is not None else MESSAGE_FERME)
 
 
-class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+class DevoirViewSet(BrouillonsMixin, ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
     annee_path = 'annee_academique'
     queryset = (
         Devoir.objects.select_related('filiere__etablissement', 'niveau', 'annee_academique', 'cree_par__etablissement',

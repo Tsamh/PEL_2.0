@@ -365,7 +365,8 @@ class DevoirEtudiantSerializer(serializers.ModelSerializer):
         model = Devoir
         fields = ['id', 'titre', 'objectifs', 'consignes', 'ressources', 'langage', 'langage_display', 'fichier_principal',
                   'filiere', 'filiere_libelle', 'niveau', 'niveau_libelle', 'annee_academique', 'annee_libelle',
-                  'ec', 'ec_libelle', 'date_debut', 'date_fin', 'bareme', 'cree_par_nom', 'exercices', 'etat']
+                  'ec', 'ec_libelle', 'date_debut', 'date_fin', 'bareme', 'cree_par_nom', 'exercices', 'etat',
+                  'resoumission_autorisee']
         read_only_fields = fields
 
     def get_etat(self, devoir):

@@ -39,6 +39,7 @@ class Devoir(models.Model):
     date_debut = models.DateTimeField(null=True, blank=True)
     date_fin = models.DateTimeField(null=True, blank=True)
     est_publie = models.BooleanField(default=False)
+    resoumission_autorisee = models.BooleanField(default=False)
     statut_validation = models.CharField(max_length=12, choices=STATUT_VALIDATION_CHOICES, default=BROUILLON)
     APRES_VALIDATION = 'apres_validation'
     IMMEDIATE = 'immediate'
@@ -183,6 +184,8 @@ class SoumissionDevoir(models.Model):
     note_proposee = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
     commentaire = models.TextField(blank=True)
     date_soumission = models.DateTimeField(auto_now_add=True)
+    numero_version = models.PositiveIntegerField(default=1)
+    soumission_auto = models.BooleanField(default=False)
 
     class Meta:
         verbose_name = "Soumission de devoir"
@@ -192,6 +195,28 @@ class SoumissionDevoir(models.Model):
 
     def __str__(self):
         return f"{self.etudiant} - {self.devoir}"
+
+
+class VersionSoumission(models.Model):
+    """Version remplacée d'une soumission : réponses et référence de la dernière correction de chaque exercice."""
+    soumission = models.ForeignKey(SoumissionDevoir, on_delete=models.CASCADE, related_name='versions')
+    numero = models.PositiveIntegerField()
+    date_soumission = models.DateTimeField()
+    soumission_auto = models.BooleanField(default=False)
+    note_proposee = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    reponses = models.JSONField(default=list, blank=True,
+                                help_text="[{exercice, fichiers, correction}] ; correction : identifiant d'exécution ou nul")
+
+    class Meta:
+        verbose_name = "Version de soumission"
+        verbose_name_plural = "Versions de soumissions"
+        ordering = ['-numero']
+        constraints = [
+            models.UniqueConstraint(fields=['soumission', 'numero'], name='version_soumission_unique'),
+        ]
+
+    def __str__(self):
+        return f"{self.soumission} : version {self.numero}"
 
 
 class ReponseExercice(models.Model):
@@ -209,6 +234,24 @@ class ReponseExercice(models.Model):
 
     def __str__(self):
         return f"{self.soumission} : {self.exercice}"
+
+
+class BrouillonExercice(models.Model):
+    """Travail en cours d'un étudiant sur un exercice, enregistré automatiquement."""
+    etudiant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='brouillons_exercices')
+    exercice = models.ForeignKey(Exercice, on_delete=models.CASCADE, related_name='brouillons')
+    fichiers = models.JSONField(default=list, blank=True, help_text="Fichiers : [{nom, contenu}]")
+    modifie_le = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Brouillon d'exercice"
+        verbose_name_plural = "Brouillons d'exercices"
+        constraints = [
+            models.UniqueConstraint(fields=['etudiant', 'exercice'], name='brouillon_exercice_unique'),
+        ]
+
+    def __str__(self):
+        return f"{self.etudiant} : {self.exercice}"
 
 
 class Execution(models.Model):
