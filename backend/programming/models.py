@@ -4,8 +4,6 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
-EXTENSIONS = {'python': 'py', 'javascript': 'js', 'c': 'c', 'cpp': 'cpp', 'java': 'java', 'autre': 'txt'}
-
 
 class Devoir(models.Model):
     LANGAGE_CHOICES = [

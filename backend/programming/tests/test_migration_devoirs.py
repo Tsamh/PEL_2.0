@@ -13,7 +13,7 @@ ORIGINE = [('programming', '0004_devoir_ec_notematiere')]
 class RepriseDevoirsTests(TransactionTestCase):
     def setUp(self):
         executor = MigrationExecutor(connection)
-        self.apres = [executor.loader.graph.leaf_nodes('programming')[0]]
+        self.apres = [('programming', '0008_execution')]
         executor.migrate(AVANT)
         autres = [n for n in executor.loader.graph.leaf_nodes() if n[0] != 'programming']
         apps = executor.loader.project_state(AVANT + autres).apps

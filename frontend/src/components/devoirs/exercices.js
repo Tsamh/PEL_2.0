@@ -11,7 +11,8 @@ const EXTENSIONS = { python: 'py', javascript: 'js', c: 'c', cpp: 'cpp', java: '
 const EXTENSIONS_CONNUES = new Set(Object.values(EXTENSIONS));
 
 // Nom du fichier unique d'un exercice selon le langage du devoir.
-export const nomFichier = (langage) => `main.${EXTENSIONS[langage] || 'txt'}`;
+// Java : le fichier principal s'appelle Main.java (l'exécuteur l'exige).
+export const nomFichier = (langage) => (langage === 'java' ? 'Main.java' : `main.${EXTENSIONS[langage] || 'txt'}`);
 
 export const nouveauTest = () => ({ entree: '', sortie_attendue: '', public: false, poids: 1 });
 export const nouvelExemple = () => ({ entree: '', sortie: '', explication: '' });
@@ -50,10 +51,11 @@ export const avecContenuPrincipal = (fichiers, contenu, langage) => (fichiers.le
   ? fichiers.map((f, i) => (i === 0 ? { ...f, contenu } : f))
   : [{ nom: nomFichier(langage), contenu }]);
 
-// Changement de langage : les fichiers main.<ext> d'un langage connu prennent l'extension du nouveau langage.
+// Changement de langage : les fichiers main.<ext> d'un langage connu (Main.java pour Java) prennent le nom du nouveau langage.
 export const renommerFichiers = (fichiers, langage) => fichiers.map((f) => {
   const [base, ext, ...reste] = f.nom.split('.');
-  return base === 'main' && reste.length === 0 && EXTENSIONS_CONNUES.has(ext) ? { ...f, nom: nomFichier(langage) } : f;
+  const principal = base === 'main' || (base === 'Main' && ext === 'java');
+  return principal && reste.length === 0 && EXTENSIONS_CONNUES.has(ext) ? { ...f, nom: nomFichier(langage) } : f;
 });
 
 // Format d'écriture de l'API : liste complète des exercices avec leurs tests ; l'ordre suit la liste.

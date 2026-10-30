@@ -73,7 +73,7 @@ class SoumissionTests(Base):
         self.assertEqual([s['id'] for s in donnees], [soumission.id])
 
     def test_reponse_partielle_acceptee(self):
-        res = self.soumettre(reponses=[{'exercice': self.ex2.id, 'fichiers': []}])
+        res = self.soumettre(reponses=[{'exercice': self.ex2.id, 'fichiers': [{'nom': 'main.py', 'contenu': ''}]}])
         self.assertEqual(res.status_code, 201, res.data)
 
     def test_doublon_409_sans_500(self):

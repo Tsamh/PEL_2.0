@@ -51,6 +51,19 @@ def langage(cle):
         raise ValueError(f"Langage non pris en charge : {cle}") from None
 
 
+def fichier_principal(cle):
+    """Nom du fichier principal du langage, ou None s'il n'est pas exécutable (`autre`)."""
+    return LANGAGES[cle].fichier_principal if cle in LANGAGES else None
+
+
+def message_principal(cle, fichiers):
+    """Message d'erreur si le fichier principal (nom exact) manque pour un langage exécutable, sinon None."""
+    principal = fichier_principal(cle)
+    if principal is None or any(isinstance(f, dict) and f.get('nom') == principal for f in fichiers):
+        return None
+    return f"Le fichier principal {principal} est obligatoire."
+
+
 def image(cle):
     langage(cle)
     images = getattr(settings, 'PEL_IMAGES_EXECUTION', None) or {}

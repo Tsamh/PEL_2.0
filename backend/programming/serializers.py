@@ -10,7 +10,7 @@ from quiz.acces import CLES_CIBLES, verifier_cibles
 from quiz.exceptions import Conflit
 from quiz.models import TagQuestion
 from .execution import BUDGET_TESTS_MS, texte_stockable
-from .execution.langages import nom_refuse
+from .execution.langages import fichier_principal, message_principal, nom_refuse
 from .models import CasDeTest, Devoir, Execution, Exercice, SoumissionDevoir, NoteMatiere
 from .validation import PROFIL_DEVOIR, exercices_modifies
 
@@ -205,6 +205,7 @@ class DevoirSerializer(serializers.ModelSerializer):
     validation_requise = serializers.SerializerMethodField()
     valide_par_nom = serializers.SerializerMethodField()
     a_des_soumissions = serializers.SerializerMethodField()
+    fichier_principal = serializers.SerializerMethodField()
 
     class Meta:
         model = Devoir
@@ -242,6 +243,9 @@ class DevoirSerializer(serializers.ModelSerializer):
 
     def get_a_des_soumissions(self, devoir):
         return devoir.soumissions.exists()
+
+    def get_fichier_principal(self, devoir):
+        return fichier_principal(devoir.langage)
 
     def validate_ressources(self, valeur):
         return valider_ressources(valeur)
@@ -355,10 +359,11 @@ class DevoirEtudiantSerializer(serializers.ModelSerializer):
     bareme = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     exercices = ExerciceEtudiantSerializer(many=True, read_only=True)
     etat = serializers.SerializerMethodField()
+    fichier_principal = serializers.SerializerMethodField()
 
     class Meta:
         model = Devoir
-        fields = ['id', 'titre', 'objectifs', 'consignes', 'ressources', 'langage', 'langage_display',
+        fields = ['id', 'titre', 'objectifs', 'consignes', 'ressources', 'langage', 'langage_display', 'fichier_principal',
                   'filiere', 'filiere_libelle', 'niveau', 'niveau_libelle', 'annee_academique', 'annee_libelle',
                   'ec', 'ec_libelle', 'date_debut', 'date_fin', 'bareme', 'cree_par_nom', 'exercices', 'etat']
         read_only_fields = fields
@@ -375,6 +380,9 @@ class DevoirEtudiantSerializer(serializers.ModelSerializer):
 
     def get_cree_par_nom(self, devoir):
         return devoir.cree_par.get_full_name() if devoir.cree_par_id else ''
+
+    def get_fichier_principal(self, devoir):
+        return fichier_principal(devoir.langage)
 
     def get_ec_libelle(self, devoir):
         return devoir.ec.libelle if devoir.ec_id else None
@@ -403,6 +411,9 @@ def valider_reponses(devoir, valeur):
             fichiers = valider_fichiers(reponse.get('fichiers', []))
         except serializers.ValidationError as erreur:
             raise serializers.ValidationError({'reponses': [f"Réponse {i} : {m}" for m in erreur.detail]})
+        manque = message_principal(devoir.langage, fichiers)
+        if manque:
+            raise serializers.ValidationError({'reponses': [f"Réponse {i} : {manque}"]})
         reponses.append((exercices[exercice_id], fichiers))
     return reponses
 

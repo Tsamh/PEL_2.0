@@ -12,7 +12,7 @@ from accounts.scoping import en_entier, q_evaluation_etablissement
 from quiz.exceptions import Conflit
 from .execution import file as file_execution
 from .execution.executeur import MESSAGE_LANGAGE
-from .execution.langages import LANGAGES
+from .execution.langages import LANGAGES, message_principal
 from .models import Execution
 from .serializers import CONTENU_FICHIER_MAX, NON_AUTORISE, contient_non_stockable, execution_donnees, valider_fichiers
 
@@ -59,6 +59,9 @@ def lire_demande(devoir, donnees):
         fichiers = valider_fichiers(donnees.get('fichiers'))
     except ValidationError as erreur:
         raise ValidationError({'fichiers': erreur.detail})
+    manque = message_principal(devoir.langage, fichiers)
+    if manque:
+        raise ValidationError({'fichiers': [manque]})
     entree = donnees.get('entree', '')
     if entree is None:
         entree = ''
