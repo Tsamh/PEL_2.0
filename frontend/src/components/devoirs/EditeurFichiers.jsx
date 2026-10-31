@@ -13,6 +13,16 @@ function langageDe(nom, langage, principal) {
   return (point > 0 && LANGAGES_EXTENSION[nom.slice(point + 1).toLowerCase()]) || 'plaintext';
 }
 
+// Identifiant stable par nom de fichier : le modèle Monaco (clé = path) survit aux renommages mais pas aux
+// suppressions ni aux fichiers qui apparaissent de l'extérieur. Renvoie `ids` tel quel s'il est à jour.
+function synchroniser(ids, fichiers) {
+  const map = new Map();
+  let next = ids.next;
+  for (const f of fichiers) map.set(f.nom, ids.map.get(f.nom) ?? next++);
+  const identique = map.size === ids.map.size && [...map].every(([nom, id]) => ids.map.get(nom) === id);
+  return identique ? ids : { map, next };
+}
+
 const styleBarre = { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px', marginBottom: '6px' };
 const styleOnglet = (actif) => ({
   padding: '4px 10px', border: '1px solid var(--gray-200)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem',
@@ -30,11 +40,17 @@ export default function EditeurFichiers({
   // saisie : { mode: 'ajout' | 'renommage', valeur, ancien } ou null.
   const [saisie, setSaisie] = useState(null);
   const [erreur, setErreur] = useState('');
+  const [ids, setIds] = useState({ map: new Map(), next: 1 });
   const editeur = useRef(null);
 
-  // Le fichier actif suit son nom ; s'il a disparu (changement de langage, suppression), on garde la même position.
+  const idsAJour = synchroniser(ids, fichiers);
+  if (idsAJour !== ids) setIds(idsAJour);
+  // Le renommage en cours disparaît avec son fichier (changement venu de l'extérieur).
+  if (saisie && saisie.mode === 'renommage' && !fichiers.some((f) => f.nom === saisie.ancien)) setSaisie(null);
+
+  // Le fichier actif suit son nom ; s'il a disparu à cause d'un changement extérieur, on revient au premier.
   let position = fichiers.findIndex((f) => f.nom === actif.nom);
-  if (position < 0) position = Math.min(actif.index, fichiers.length - 1);
+  if (position < 0) position = fichiers.length ? 0 : -1;
   const courant = position >= 0 ? fichiers[position] : null;
   const principalAbsent = principal && !fichiers.some((f) => f.nom === principal);
 
@@ -59,6 +75,10 @@ export default function EditeurFichiers({
       onChange(ajouter(fichiers, nom));
       choisir(nom, fichiers.length);
     } else {
+      const map = new Map(idsAJour.map);
+      map.set(nom, map.get(saisie.ancien));
+      map.delete(saisie.ancien);
+      setIds({ map, next: idsAJour.next });
       onChange(renommer(fichiers, saisie.ancien, nom));
       choisir(nom, position);
     }
@@ -134,7 +154,7 @@ export default function EditeurFichiers({
 
       {courant ? (
         <CodeEditor language={langageDe(courant.nom, langage, principal)} value={courant.contenu} readOnly={readOnly}
-          height={height} path={`${espace}/${encodeURIComponent(courant.nom)}`} onChange={modifierContenu}
+          height={height} path={`${espace}/${idsAJour.map.get(courant.nom)}`} onChange={modifierContenu}
           onMount={(ed) => { editeur.current = ed; }} />
       ) : (
         <p style={styleNote}>{readOnly ? 'Aucun fichier.' : 'Aucun fichier : ajoutez-en un avec « + Fichier ».'}</p>
