@@ -12,7 +12,7 @@ from accounts.scoping import en_entier, q_evaluation_etablissement
 from quiz.exceptions import Conflit
 from .execution import file as file_execution
 from .execution.executeur import MESSAGE_LANGAGE
-from .execution.langages import LANGAGES
+from .execution.langages import LANGAGES, message_principal
 from .models import Execution
 from .serializers import CONTENU_FICHIER_MAX, NON_AUTORISE, contient_non_stockable, execution_donnees, valider_fichiers
 
@@ -31,17 +31,17 @@ def langage_executable(devoir):
     return devoir.langage in LANGAGES
 
 
-def verifier_limite(user):
-    """429 au-delà de LIMITE_PAR_MINUTE demandes dans la minute (fenêtre fixe, cache Django, clé par utilisateur)."""
-    cle = f'pel:executions:{user.pk}'
+def verifier_limite(user, nom='executions', limite=LIMITE_PAR_MINUTE, message=MESSAGE_TROP):
+    """429 au-delà de `limite` demandes dans la minute (fenêtre fixe, cache Django, clé par utilisateur et par `nom`)."""
+    cle = f'pel:{nom}:{user.pk}'
     cache.add(cle, 0, FENETRE_LIMITE_S)
     try:
         nombre = cache.incr(cle)
     except ValueError:  # clé expirée entre add et incr
         cache.set(cle, 1, FENETRE_LIMITE_S)
         nombre = 1
-    if nombre > LIMITE_PAR_MINUTE:
-        raise Throttled(detail=MESSAGE_TROP)
+    if nombre > limite:
+        raise Throttled(detail=message)
 
 
 def lire_demande(devoir, donnees):
@@ -59,6 +59,9 @@ def lire_demande(devoir, donnees):
         fichiers = valider_fichiers(donnees.get('fichiers'))
     except ValidationError as erreur:
         raise ValidationError({'fichiers': erreur.detail})
+    manque = message_principal(devoir.langage, fichiers)
+    if manque:
+        raise ValidationError({'fichiers': [manque]})
     entree = donnees.get('entree', '')
     if entree is None:
         entree = ''

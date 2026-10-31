@@ -170,9 +170,13 @@ PEL/
 - **Limites par exercice** : temps par test (2 000 ms par défaut) et mémoire (256 Mo par défaut)
 - **Cas de test** publics ou cachés, pondérés, comparaison tolérante (espaces de fin de ligne, lignes vides finales)
 - **Politique de résultats** : après validation par l'enseignant (défaut) ou immédiate
-- Code initial fourni aux étudiants (lecture seule)
+- **IDE multi-fichiers** : onglets, ajout, renommage et suppression (20 fichiers au plus), recherche et remplacement ; le fichier principal (`main.py`, `Main.java`...) est obligatoire. C, C++ et Java compilent tous leurs fichiers source
+- Fichiers de départ fournis aux étudiants
 - Solution de référence (cachée aux étudiants)
-- Timer avec soumission automatique
+- **Auto-sauvegarde et reprise** : brouillon enregistré sur le serveur 3 s après la dernière frappe, repris depuis n'importe quel appareil
+- **Resoumissions** (option par devoir, désactivée par défaut) : tant que le devoir est ouvert et la note non validée ; la dernière version compte, les précédentes restent consultables dans l'historique
+- **Soumission automatique** : par le navigateur peu avant la fermeture, sinon par le worker, qui soumet les brouillons d'un étudiant sans soumission une fois sa dernière fenêtre fermée
+- **Accusé de réception** par e-mail à chaque soumission
 - Date limite de soumission
 - **Matière (EC) associée** au devoir
 
@@ -254,6 +258,8 @@ PEL/
 - `/api/programming/soumissions/` - Soumissions étudiants (correction automatique mise en file)
 - `POST /api/programming/soumissions/{id}/corriger/` - Valider la note (score facultatif : note proposée arrondie) et les remarques
 - `POST /api/programming/soumissions/{id}/recorriger/` - Relancer les corrections en erreur (`{tout: true}` : toutes)
+- `GET, PUT /api/programming/devoirs/{id}/brouillons/` - Lire et enregistrer les brouillons de l'étudiant (`{exercice, fichiers}`)
+- `GET /api/programming/soumissions/{id}/versions/` - Versions remplacées d'une soumission
 
 ### Notes
 - `/api/programming/notes/` - CRUD notes par matière

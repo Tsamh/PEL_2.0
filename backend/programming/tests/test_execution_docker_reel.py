@@ -21,6 +21,39 @@ class DockerReelTests(SimpleTestCase):
         return rapport, [statut_du_resultat(rapport['compilation_ok'], r, a)
                          for r, a in zip(rapport['resultats'] or [None] * len(cas), attendues)]
 
+    def multi(self, langage, fichiers, attendue='ok', temps=5000, memoire=256):
+        rapport = ExecuteurDocker().lancer(langage, [{'nom': n, 'contenu': c} for n, c in fichiers],
+                                           [{'entree': ''}], temps, memoire)
+        self.assertTrue(rapport['compilation_ok'], rapport)
+        self.assertEqual(statut_du_resultat(True, rapport['resultats'][0], attendue), 'OK', rapport)
+
+    def test_c_plusieurs_fichiers_avec_en_tete(self):
+        self.multi('c', [
+            ('main.c', '#include <stdio.h>\n#include "util.h"\n'
+                       'int main(){printf("%d\\n", double_(21));return 0;}\n'),
+            ('util.c', '#include "util.h"\nint double_(int x){return 2*x;}\n'),
+            ('util.h', 'int double_(int x);\n')], attendue='42')
+
+    def test_cpp_second_fichier(self):
+        self.multi('cpp', [
+            ('main.cpp', '#include <iostream>\nint valeur();\nint main(){std::cout<<valeur()<<std::endl;}\n'),
+            ('autre.cpp', 'int valeur(){return 7;}\n')], attendue='7')
+
+    def test_java_seconde_classe(self):
+        self.multi('java', [
+            ('Main.java', 'public class Main { public static void main(String[] a) '
+                          '{ System.out.println(Aide.valeur()); } }'),
+            ('Aide.java', 'public class Aide { static int valeur() { return 5; } }')], attendue='5')
+
+    def test_c_fichier_nomme_comme_une_option(self):
+        self.multi('c', [
+            ('main.c', '#include <stdio.h>\nint autre(void);\nint main(){printf("%d\\n", autre());return 0;}\n'),
+            ('-o.c', 'int autre(void){return 9;}\n')], attendue='9')
+
+    def test_python_importe_un_fichier_voisin(self):
+        self.multi('python', [('main.py', 'import voisin\nprint(voisin.VALEUR)\n'), ('voisin.py', 'VALEUR = 3\n')],
+                   attendue='3')
+
     def test_python_ok_et_wa(self):
         _, statuts = self.statuts('python', 'main.py', 'a, b = map(int, input().split())\nprint(a + b)\n',
                                   ['1 2', '40 2'], ['3', '41'])

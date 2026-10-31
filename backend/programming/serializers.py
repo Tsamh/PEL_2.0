@@ -10,9 +10,9 @@ from quiz.acces import CLES_CIBLES, verifier_cibles
 from quiz.exceptions import Conflit
 from quiz.models import TagQuestion
 from .execution import BUDGET_TESTS_MS, texte_stockable
-from .execution.langages import nom_refuse
-from .models import CasDeTest, Devoir, Execution, Exercice, SoumissionDevoir, NoteMatiere
-from .validation import PROFIL_DEVOIR, exercices_modifies
+from .execution.langages import fichier_principal, message_principal, nom_refuse
+from .models import BrouillonExercice, CasDeTest, Devoir, Execution, Exercice, SoumissionDevoir, NoteMatiere
+from .validation import PROFIL_DEVOIR, contenu_exercice, exercices_modifies, ordonnes
 
 MESSAGE_VERROU = "Ce devoir a déjà des soumissions : ses exercices et ses tests ne peuvent plus être modifiés."
 MESSAGE_COMPETENCE = "Une compétence choisie n'est pas disponible pour cet établissement."
@@ -128,6 +128,8 @@ class CasDeTestSerializer(serializers.ModelSerializer):
 
 class ExerciceSerializer(serializers.ModelSerializer):
     """Exercice saisi dans le formulaire du devoir (vue enseignant : solution et tous les tests)."""
+    # Identifiant en écriture facultatif : il sert à retrouver la ligne existante, jamais à en créer une.
+    id = serializers.IntegerField(required=False)
     tests = CasDeTestSerializer(many=True, required=False)
     competences = serializers.PrimaryKeyRelatedField(
         many=True, required=False, queryset=TagQuestion.objects.filter(type=TagQuestion.COMPETENCE),
@@ -139,7 +141,6 @@ class ExerciceSerializer(serializers.ModelSerializer):
         fields = ['id', 'ordre', 'titre', 'enonce', 'contraintes', 'exemples', 'fichiers_initiaux', 'solution',
                   'points', 'difficulte', 'limite_temps_ms', 'limite_memoire_mo', 'competences', 'competences_detail',
                   'tests']
-        read_only_fields = ['id']
         extra_kwargs = {'enonce': {'trim_whitespace': False}, 'contraintes': {'trim_whitespace': False}}
 
     def get_competences_detail(self, exercice):
@@ -170,18 +171,87 @@ class ExerciceSerializer(serializers.ModelSerializer):
         return attrs
 
 
+def _creer_tests(exercice, tests_data):
+    for j, t_data in enumerate(tests_data):
+        t_data = dict(t_data)
+        t_data.setdefault('ordre', j + 1)
+        CasDeTest.objects.create(exercice=exercice, **t_data)
+
+
 def _creer_exercices(devoir, exercices_data):
     for i, e_data in enumerate(exercices_data):
         e_data = dict(e_data)
+        e_data.pop('id', None)
         tests_data = e_data.pop('tests', [])
         competences = e_data.pop('competences', [])
         e_data.setdefault('ordre', i + 1)
         exercice = Exercice.objects.create(devoir=devoir, **e_data)
         exercice.competences.set(competences)
-        for j, t_data in enumerate(tests_data):
-            t_data = dict(t_data)
-            t_data.setdefault('ordre', j + 1)
-            CasDeTest.objects.create(exercice=exercice, **t_data)
+        _creer_tests(exercice, tests_data)
+
+
+CHAMPS_EXERCICE = ('titre', 'enonce', 'contraintes', 'exemples', 'fichiers_initiaux', 'solution', 'points', 'difficulte',
+                   'limite_temps_ms', 'limite_memoire_mo')
+
+
+def _apparier_exercices(actuels, recus):
+    """Chaque exercice reçu retrouve sa ligne par `id`, sans jamais deviner quand la requête en porte.
+
+    Un `id` étranger au devoir ou répété dans la requête compte comme absent. Un exercice sans `id` est alors nouveau,
+    sauf si la requête n'en porte aucun (client d'API) : d'abord le titre exact, puis le rang parmi ceux qui restent.
+    Renvoie (exercice actuel ou None pour chaque élément de `recus`, exercices actuels sans correspondant).
+    """
+    par_id = {e.pk: e for e in actuels}
+    envoyes = [data.get('id') for data in recus]
+    paires = [None] * len(recus)
+    libres = list(actuels)
+    for i, identifiant in enumerate(envoyes):
+        if identifiant in par_id and envoyes.count(identifiant) == 1:
+            paires[i] = par_id[identifiant]
+            libres.remove(paires[i])
+    if all(identifiant is None for identifiant in envoyes):
+        for i, data in enumerate(recus):
+            paires[i] = next((e for e in libres if e.titre == data.get('titre', '')), None)
+            if paires[i] is not None:
+                libres.remove(paires[i])
+        for i in range(len(recus)):
+            if paires[i] is None and libres:
+                paires[i] = libres.pop(0)
+    return paires, libres
+
+
+def _mettre_a_jour_exercice(exercice, data):
+    """Remplace le contenu de l'exercice (un champ absent reprend sa valeur par défaut, comme à la création).
+
+    Des tests identiques ne sont pas réécrits : les résultats d'essai qui les citent restent lisibles.
+    """
+    memes_tests = contenu_exercice(exercice)['tests'] == contenu_exercice(data)['tests']
+    for champ in CHAMPS_EXERCICE:
+        setattr(exercice, champ, data[champ] if champ in data else Exercice._meta.get_field(champ).get_default())
+    exercice.ordre = data['ordre']
+    exercice.save()
+    exercice.competences.set(data.get('competences', []))
+    if not memes_tests:
+        exercice.tests.all().delete()
+        _creer_tests(exercice, data.get('tests', []))
+
+
+def _mettre_a_jour_exercices(devoir, exercices_data):
+    """Les exercices gardent leur identifiant : brouillons et onglets ouverts des étudiants restent valables.
+
+    Seul un exercice sans correspondant disparaît, avec ses brouillons. Aucune contrainte d'unicité ne porte sur `ordre`,
+    qui est rendu strictement croissant : le tri (`ordre`, `id`) suit la liste reçue, même avec des rangs égaux.
+    """
+    recus = ordonnes([{**e, 'ordre': e.get('ordre', i + 1)} for i, e in enumerate(exercices_data)])
+    precedent = -1
+    for data in recus:
+        data['ordre'] = precedent = max(data['ordre'], precedent + 1)
+    paires, sans_correspondant = _apparier_exercices(devoir.exercices.order_by('ordre', 'id'), recus)
+    Exercice.objects.filter(pk__in=[e.pk for e in sans_correspondant]).delete()
+    for exercice, data in zip(paires, recus):
+        if exercice is not None:
+            _mettre_a_jour_exercice(exercice, data)
+    _creer_exercices(devoir, [data for exercice, data in zip(paires, recus) if exercice is None])
 
 
 def _nom(user):
@@ -205,6 +275,8 @@ class DevoirSerializer(serializers.ModelSerializer):
     validation_requise = serializers.SerializerMethodField()
     valide_par_nom = serializers.SerializerMethodField()
     a_des_soumissions = serializers.SerializerMethodField()
+    a_des_brouillons = serializers.SerializerMethodField()
+    fichier_principal = serializers.SerializerMethodField()
 
     class Meta:
         model = Devoir
@@ -242,6 +314,12 @@ class DevoirSerializer(serializers.ModelSerializer):
 
     def get_a_des_soumissions(self, devoir):
         return devoir.soumissions.exists()
+
+    def get_a_des_brouillons(self, devoir):
+        return BrouillonExercice.objects.filter(exercice__devoir=devoir).exists()
+
+    def get_fichier_principal(self, devoir):
+        return fichier_principal(devoir.langage)
 
     def validate_ressources(self, valeur):
         return valider_ressources(valeur)
@@ -307,21 +385,20 @@ class DevoirSerializer(serializers.ModelSerializer):
         exercices_data = validated_data.pop('exercices', None)
         cibles_data = {cle: validated_data.pop(cle) for cle in CLES_CIBLES if cle in validated_data}
         with transaction.atomic():
-            # Le devoir est verrouillé : une soumission ne peut pas apparaître entre le contrôle et le remplacement.
+            # Le devoir est verrouillé : une soumission ne peut pas apparaître entre le contrôle et la mise à jour.
             Devoir.objects.select_for_update().get(pk=instance.pk)
             # Des exercices renvoyés à l'identique ne sont pas réécrits : les réponses qui les citent restent valables.
-            remplacer = exercices_data is not None and exercices_modifies(instance, exercices_data)
+            modifier = exercices_data is not None and exercices_modifies(instance, exercices_data)
             langage_change = 'langage' in validated_data and validated_data['langage'] != instance.langage
-            if (remplacer or langage_change) and instance.soumissions.exists():
+            if (modifier or langage_change) and instance.soumissions.exists():
                 raise Conflit(MESSAGE_VERROU)
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
             instance.save()
             for cle, valeurs in cibles_data.items():
                 getattr(instance, cle).set(valeurs)
-            if remplacer:
-                instance.exercices.all().delete()
-                _creer_exercices(instance, exercices_data)
+            if modifier:
+                _mettre_a_jour_exercices(instance, exercices_data)
         return instance
 
 
@@ -355,12 +432,14 @@ class DevoirEtudiantSerializer(serializers.ModelSerializer):
     bareme = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     exercices = ExerciceEtudiantSerializer(many=True, read_only=True)
     etat = serializers.SerializerMethodField()
+    fichier_principal = serializers.SerializerMethodField()
 
     class Meta:
         model = Devoir
-        fields = ['id', 'titre', 'objectifs', 'consignes', 'ressources', 'langage', 'langage_display',
+        fields = ['id', 'titre', 'objectifs', 'consignes', 'ressources', 'langage', 'langage_display', 'fichier_principal',
                   'filiere', 'filiere_libelle', 'niveau', 'niveau_libelle', 'annee_academique', 'annee_libelle',
-                  'ec', 'ec_libelle', 'date_debut', 'date_fin', 'bareme', 'cree_par_nom', 'exercices', 'etat']
+                  'ec', 'ec_libelle', 'date_debut', 'date_fin', 'bareme', 'cree_par_nom', 'exercices', 'etat',
+                  'resoumission_autorisee']
         read_only_fields = fields
 
     def get_etat(self, devoir):
@@ -375,6 +454,9 @@ class DevoirEtudiantSerializer(serializers.ModelSerializer):
 
     def get_cree_par_nom(self, devoir):
         return devoir.cree_par.get_full_name() if devoir.cree_par_id else ''
+
+    def get_fichier_principal(self, devoir):
+        return fichier_principal(devoir.langage)
 
     def get_ec_libelle(self, devoir):
         return devoir.ec.libelle if devoir.ec_id else None
@@ -403,6 +485,9 @@ def valider_reponses(devoir, valeur):
             fichiers = valider_fichiers(reponse.get('fichiers', []))
         except serializers.ValidationError as erreur:
             raise serializers.ValidationError({'reponses': [f"Réponse {i} : {m}" for m in erreur.detail]})
+        manque = message_principal(devoir.langage, fichiers)
+        if manque:
+            raise serializers.ValidationError({'reponses': [f"Réponse {i} : {manque}"]})
         reponses.append((exercices[exercice_id], fichiers))
     return reponses
 
@@ -474,6 +559,12 @@ def resultats_visibles_etudiant(soumission):
             and soumission.statut == SoumissionDevoir.CORRIGEE_AUTO)
 
 
+def nombre_versions(soumission):
+    """Versions remplacées : valeur annotée par la liste, sinon une requête."""
+    annote = getattr(soumission, 'nb_versions', None)
+    return annote if annote is not None else soumission.versions.count()
+
+
 class SoumissionDevoirSerializer(serializers.ModelSerializer):
     """Vue correcteur : réponses avec la dernière correction de chaque exercice et ses résultats complets."""
     etudiant_nom = serializers.CharField(source='etudiant.get_full_name', read_only=True)
@@ -481,12 +572,18 @@ class SoumissionDevoirSerializer(serializers.ModelSerializer):
     bareme = serializers.DecimalField(source='devoir.bareme', max_digits=12, decimal_places=2, read_only=True)
     politique_resultats = serializers.CharField(source='devoir.politique_resultats', read_only=True)
     reponses = serializers.SerializerMethodField()
+    nombre_versions = serializers.SerializerMethodField()
 
     class Meta:
         model = SoumissionDevoir
         fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'score', 'note_proposee',
-                  'commentaire', 'date_soumission', 'bareme', 'politique_resultats', 'reponses']
-        read_only_fields = ['id', 'etudiant', 'statut', 'score', 'note_proposee', 'commentaire', 'date_soumission']
+                  'commentaire', 'date_soumission', 'numero_version', 'soumission_auto', 'nombre_versions', 'bareme',
+                  'politique_resultats', 'reponses']
+        read_only_fields = ['id', 'etudiant', 'statut', 'score', 'note_proposee', 'commentaire', 'date_soumission',
+                            'numero_version', 'soumission_auto']
+
+    def get_nombre_versions(self, soumission):
+        return nombre_versions(soumission)
 
     def correction(self, reponse):
         if self.context.get('resume'):
@@ -518,13 +615,22 @@ class SoumissionDevoirEtudiantSerializer(serializers.ModelSerializer):
     note_proposee = serializers.SerializerMethodField()
     commentaire = serializers.SerializerMethodField()
     reponses = serializers.SerializerMethodField()
+    nombre_versions = serializers.SerializerMethodField()
+    resoumission_possible = serializers.SerializerMethodField()
 
     class Meta:
         model = SoumissionDevoir
         fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'resultats_visibles',
-                  'score', 'note_proposee', 'commentaire', 'date_soumission', 'bareme', 'politique_resultats',
-                  'reponses']
+                  'score', 'note_proposee', 'commentaire', 'date_soumission', 'numero_version', 'soumission_auto',
+                  'nombre_versions', 'resoumission_possible', 'bareme', 'politique_resultats', 'reponses']
         read_only_fields = fields
+
+    def get_nombre_versions(self, soumission):
+        return nombre_versions(soumission)
+
+    def get_resoumission_possible(self, soumission):
+        from .versions import resoumission_possible
+        return resoumission_possible(soumission)
 
     def get_resultats_visibles(self, soumission):
         return resultats_visibles_etudiant(soumission)

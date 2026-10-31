@@ -51,6 +51,40 @@ def langage(cle):
         raise ValueError(f"Langage non pris en charge : {cle}") from None
 
 
+def fichier_principal(cle):
+    """Nom du fichier principal du langage, ou None s'il n'est pas exécutable (`autre`)."""
+    return LANGAGES[cle].fichier_principal if cle in LANGAGES else None
+
+
+def message_principal(cle, fichiers):
+    """Message d'erreur si le fichier principal (nom exact) manque pour un langage exécutable, sinon None."""
+    principal = fichier_principal(cle)
+    if principal is None or any(isinstance(f, dict) and f.get('nom') == principal for f in fichiers):
+        return None
+    return f"Le fichier principal {principal} est obligatoire."
+
+
+# Extensions des fichiers source passés au compilateur (les en-têtes ne sont jamais compilés).
+EXTENSIONS_COMPILEES = {'c': ('.c',), 'cpp': ('.cpp', '.cc', '.cxx'), 'java': ('.java',)}
+
+
+def commande_compilation(cle, fichiers):
+    """Commande de compilation de tous les fichiers source, ou None si le langage n'est pas compilé.
+
+    Le fichier principal vient en tête, les autres sources suivent triées par nom. Chaque source est préfixée
+    de `./` : un nom commençant par `-` ne peut pas être pris pour une option du compilateur.
+    """
+    config = langage(cle)
+    if not config.compilation:
+        return None
+    extensions = EXTENSIONS_COMPILEES[cle]
+    autres = sorted({f['nom'] for f in fichiers if f['nom'].endswith(extensions)} - {config.fichier_principal})
+    sources = [f'./{n}' for n in [config.fichier_principal] + autres]
+    commande = list(config.compilation)
+    debut = commande.index(config.fichier_principal)
+    return commande[:debut] + sources + commande[debut + 1:]
+
+
 def image(cle):
     langage(cle)
     images = getattr(settings, 'PEL_IMAGES_EXECUTION', None) or {}

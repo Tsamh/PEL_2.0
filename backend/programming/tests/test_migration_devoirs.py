@@ -13,7 +13,7 @@ ORIGINE = [('programming', '0004_devoir_ec_notematiere')]
 class RepriseDevoirsTests(TransactionTestCase):
     def setUp(self):
         executor = MigrationExecutor(connection)
-        self.apres = [executor.loader.graph.leaf_nodes('programming')[0]]
+        self.apres = [('programming', '0010_ide_etudiant')]
         executor.migrate(AVANT)
         autres = [n for n in executor.loader.graph.leaf_nodes() if n[0] != 'programming']
         apps = executor.loader.project_state(AVANT + autres).apps
@@ -99,7 +99,7 @@ class RepriseDevoirsTests(TransactionTestCase):
         brouillon = Devoir.objects.get(pk=self.brouillon)
         self.assertEqual(brouillon.statut_validation, Devoir.BROUILLON)
         self.assertEqual(set(brouillon.classes.values_list('pk', flat=True)), {self.classe_l1, self.classe_l2})
-        self.assertEqual(brouillon.exercices.get().fichiers_initiaux, [{'nom': 'main.java', 'contenu': ''}])
+        self.assertEqual(brouillon.exercices.get().fichiers_initiaux, [{'nom': 'Main.java', 'contenu': ''}])
         self.assertEqual(brouillon.exercices.get().points, Decimal('20'))
 
     def test_points_bornes(self):

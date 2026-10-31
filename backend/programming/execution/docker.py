@@ -8,7 +8,8 @@ Déroulement d'une exécution :
    lire (il ne traverse pas le dossier parent : le montage pointe directement sur `code`). Monté en lecture
    seule sur /code.
 2. Langage compilé : un volume Docker tmpfs de 64 Mo (`docker volume create`, appartenant à nobody, jamais
-   écrit sur le disque de l'hôte) reçoit le résultat de la compilation. La compilation tourne dans un
+   écrit sur le disque de l'hôte) reçoit le résultat de la compilation, qui porte sur tous les fichiers source
+   de l'exercice (`langages.commande_compilation`). La compilation tourne dans un
    conteneur à part, de courte durée, avec sa propre mémoire max(limite de l'exercice, 512 Mo) : javac et
    g++ ne sont pas soumis à la limite de l'exercice, qui reste appliquée telle quelle à chaque test. Le
    volume y est monté en écriture sur /build, et en lecture seule dans le conteneur des tests.
@@ -292,13 +293,13 @@ class ExecuteurDocker:
             os.chmod(chemin, 0o644)
 
     def lancer(self, langage, fichiers, cas, limite_temps_ms, limite_memoire_mo):
-        config = langages.langage(langage)
         langages.valider_noms(fichiers)
         image = langages.image(langage)
         lancement = langages.commande_lancement(langage, limite_memoire_mo)
+        commande_compilation = langages.commande_compilation(langage, fichiers)
         nom = f'pel-exec-{uuid.uuid4().hex}'
-        volume = f'{nom}-build' if config.compilation else None
-        budget = budget_s(bool(config.compilation), len(cas), limite_temps_ms)
+        volume = f'{nom}-build' if commande_compilation else None
+        budget = budget_s(bool(commande_compilation), len(cas), limite_temps_ms)
         echeance = time.monotonic() + budget
         fin = time.time() + budget + MARGE_ETIQUETTE_S
         duree_s = math.ceil(budget + 2 * DELAI_NETTOYAGE_S)
@@ -329,7 +330,7 @@ class ExecuteurDocker:
                     raise ServiceIndisponible(f"Démarrage du conteneur en échec : {_texte(s.erreurs)}")
                 return nom_gardien
 
-            if config.compilation:
+            if commande_compilation:
                 s = self._commande(self.commande_volume(volume, fin), delai(DELAI_COMMANDE_S))
                 if s.bloque or s.code != 0:
                     raise ServiceIndisponible(f"Création du volume de compilation en échec : {_texte(s.erreurs)}")
@@ -338,10 +339,10 @@ class ExecuteurDocker:
             demarrer(nom)
 
             compilation = ''
-            if config.compilation:
+            if commande_compilation:
                 conteneurs.append(f'{nom}-c')
                 s = self._commande(self.commande_compilation(f'{nom}-c', dossier, volume, image, limite_memoire_mo,
-                                                             config.compilation, fin),
+                                                             commande_compilation, fin),
                                    delai(DELAI_COMMANDE_S + DELAI_COMPILATION_S + MARGE_HOTE_S))
                 if s.bloque:
                     raise ServiceIndisponible("Le client docker ne répond plus pendant la compilation.")

@@ -96,8 +96,10 @@ class DevoirsApiTests(TestCase):
         self.assertEqual(res.status_code, 200, res.data)
         self.assertEqual([e['titre'] for e in res.data['exercices']], ['Nouveau'])
         self.assertEqual(res.data['bareme'], '4.00')
-        self.assertFalse(Exercice.objects.filter(pk__in=anciens).exists())
+        # Apparié par son rang : l'exercice renommé garde son identifiant, le contenu est bien remplacé.
+        self.assertLessEqual(set(devoir.exercices.values_list('pk', flat=True)), anciens)
         self.assertEqual(CasDeTest.objects.filter(exercice__devoir=devoir).count(), 1)
+        self.assertEqual(CasDeTest.objects.get(exercice__devoir=devoir).sortie_attendue, 'ok')
 
     def test_au_plus_50_exercices(self):
         res = self.creer(exercices=[exercice(f'Exercice {i}', tests=[]) for i in range(51)])

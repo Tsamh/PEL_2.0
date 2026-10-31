@@ -108,7 +108,7 @@ def apres_correction(execution):
     if execution.type != Execution.CORRECTION or execution.reponse_id is None:
         return False
     with transaction.atomic():
-        soumission = (SoumissionDevoir.objects.select_for_update().select_related('devoir')
+        soumission = (SoumissionDevoir.objects.select_for_update(of=('self',)).select_related('devoir')
                       .get(pk=execution.reponse.soumission_id))
         if soumission.statut != SoumissionDevoir.EN_CORRECTION:
             return False

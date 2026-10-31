@@ -17,6 +17,7 @@ from programming.execution import (
 from programming.execution import docker as module_docker
 from programming.execution.comparaison import sorties_egales
 from programming.execution.docker import ExecuteurDocker, budget_s, nettoyer_orphelins
+from programming.execution.langages import commande_compilation
 from programming.execution.executeur import executer, obtenir_executeur, statut_du_resultat
 from programming.execution.factice import ExecuteurFactice
 from programming.execution.langages import LANGAGES, commande_lancement, valider_noms
@@ -257,6 +258,32 @@ def scenario_normal(sorties=None, compilation=(0, b'', b''), exec_code=0, inspec
     return repondre
 
 
+class CommandeCompilationTests(SimpleTestCase):
+    def fichiers(self, *noms):
+        return [{'nom': n, 'contenu': ''} for n in noms]
+
+    def test_principal_en_tete_autres_tries(self):
+        self.assertEqual(commande_compilation('c', self.fichiers('z.c', 'main.c', 'a.c', 'util.h')),
+                         ['gcc', '-O2', '-o', '/build/prog', './main.c', './a.c', './z.c', '-lm'])
+        self.assertEqual(commande_compilation('cpp', self.fichiers('b.cpp', 'main.cpp', 'a.cc', 'c.cxx', 'x.hpp')),
+                         ['g++', '-O2', '-o', '/build/prog', './main.cpp', './a.cc', './b.cpp', './c.cxx'])
+        self.assertEqual(commande_compilation('java', self.fichiers('B.java', 'Main.java', 'A.java')),
+                         ['javac', '-d', '/build', './Main.java', './A.java', './B.java'])
+
+    def test_extensions_et_en_tete_non_compiles(self):
+        self.assertEqual(commande_compilation('c', self.fichiers('main.c', 'util.h', 'notes.txt', 'x.cpp')),
+                         ['gcc', '-O2', '-o', '/build/prog', './main.c', '-lm'])
+
+    def test_nom_commencant_par_tiret_prefixe(self):
+        commande = commande_compilation('c', self.fichiers('main.c', '-o.c'))
+        self.assertIn('./-o.c', commande)
+        self.assertNotIn('-o.c', commande)
+
+    def test_sans_compilation(self):
+        self.assertIsNone(commande_compilation('python', self.fichiers('main.py', 'a.py')))
+        self.assertIsNone(commande_compilation('javascript', self.fichiers('main.js')))
+
+
 class ExecuteurDockerTests(SimpleTestCase):
     FICHIERS_C = [{'nom': 'main.c', 'contenu': 'int main(){return 0;}'}]
     FICHIERS_PY = [{'nom': 'main.py', 'contenu': 'print(input())'}]
@@ -341,7 +368,7 @@ class ExecuteurDockerTests(SimpleTestCase):
             '--mount', f'type=bind,source={dossier},target=/code,readonly',
             '--mount', f'type=volume,source={volume},target=/build,volume-nocopy',
             '--workdir', '/code', '--env', 'HOME=/tmp', '--entrypoint', 'timeout',
-            'gcc:13', '-s', 'KILL', '30', 'gcc', '-O2', '-o', '/build/prog', 'main.c', '-lm'])
+            'gcc:13', '-s', 'KILL', '30', 'gcc', '-O2', '-o', '/build/prog', './main.c', '-lm'])
         self.assertIn(('compilation', 70), self.faux.delais)
         run = self.commande_run(appels)
         self.assertEqual(run[run.index('--memory') + 1], '64m')
@@ -359,12 +386,18 @@ class ExecuteurDockerTests(SimpleTestCase):
         self.assertEqual(appels[-3:], [['docker', 'rm', '-f', f'{nom}-c'], ['docker', 'rm', '-f', nom],
                                        ['docker', 'volume', 'rm', '-f', volume]])
 
+    def test_compilation_de_tous_les_fichiers_source(self):
+        fichiers = [{'nom': n, 'contenu': ''} for n in ('util.c', 'util.h', 'main.c')]
+        self.lancer(scenario_normal(), langage='c', fichiers=fichiers)
+        compilation = self.faux.de_genre('compilation')[0]
+        self.assertEqual(compilation[-7:], ['gcc', '-O2', '-o', '/build/prog', './main.c', './util.c', '-lm'])
+
     def test_memoire_de_compilation_au_moins_la_limite(self):
         _, appels = self.lancer(scenario_normal(), langage='cpp', fichiers=[{'nom': 'main.cpp', 'contenu': ''}],
                                 memoire=1024)
         compilation = self.faux.de_genre('compilation')[0]
         self.assertEqual(compilation[compilation.index('--memory') + 1], '1024m')
-        self.assertEqual(compilation[-5:], ['g++', '-O2', '-o', '/build/prog', 'main.cpp'])
+        self.assertEqual(compilation[-5:], ['g++', '-O2', '-o', '/build/prog', './main.cpp'])
 
     def test_lancement_par_test_entree_et_nettoyage(self):
         rapport, appels = self.lancer(scenario_normal(sorties=[(0, b'1\n', b''), (0, b'2\n', b'')]),
@@ -607,7 +640,7 @@ class ExecuteurDockerTests(SimpleTestCase):
             langage='java', fichiers=[{'nom': 'Main.java', 'contenu': 'class Main{}'}])
         self.assertTrue(rapport['resultats'][0]['memoire_depassee'])
         self.assertIn('eclipse-temurin:21-jdk', self.commande_run(appels))
-        self.assertEqual(self.faux.de_genre('compilation')[0][-4:], ['javac', '-d', '/build', 'Main.java'])
+        self.assertEqual(self.faux.de_genre('compilation')[0][-4:], ['javac', '-d', '/build', './Main.java'])
 
     def test_sorties_tronquees(self):
         rapport, _ = self.lancer(scenario_normal(sorties=[(0, b'x' * (TAILLE_MAX_SORTIE * 3), b'')]))

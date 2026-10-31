@@ -151,14 +151,17 @@ def executer(execution):
 
 
 def _resultats(execution, cas, rapport):
-    from programming.models import ResultatTest
+    from programming.models import CasDeTest, ResultatTest
+    # Un test remplacé pendant l'exécution (devoir modifié) : son résultat reste, sans citer le test disparu.
+    restants = set(CasDeTest.objects.filter(pk__in=[objet.pk for objet, _, _ in cas if objet is not None])
+                   .values_list('pk', flat=True))
     compilation_ok = bool(rapport.get('compilation_ok'))
     bruts = rapport.get('resultats') or []
     resultats = []
     for ordre, (objet, _, attendue) in enumerate(cas):
         brut = bruts[ordre] if compilation_ok and ordre < len(bruts) else None
         resultats.append(ResultatTest(
-            execution=execution, cas=objet, ordre=ordre,
+            execution=execution, cas=objet if objet is not None and objet.pk in restants else None, ordre=ordre,
             statut=statut_du_resultat(compilation_ok, brut, attendue),
             temps_ms=max(0, int((brut or {}).get('temps_ms') or 0)),
             sortie=tronquer((brut or {}).get('sortie')), erreurs=tronquer((brut or {}).get('erreurs')),

@@ -6,7 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from django.db import IntegrityError, transaction
-from django.db.models import Prefetch
+from django.db.models import Count, Prefetch
 
 from accounts.permissions import (
     IsEtudiant, RolePermission, CREATEURS, GESTION, TOUS_LES_ROLES, ENSEIGNANT, ETUDIANT,
@@ -24,17 +24,20 @@ from quiz.views import etablissement_evaluation
 from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_archivee
 from .execution import file as file_execution
 from .execution.executeur import MESSAGE_LANGAGE
-from .models import Devoir, Execution, ReponseExercice, ResultatTest, SoumissionDevoir, NoteMatiere
+from . import accuses, versions
+from .models import BrouillonExercice, Devoir, Execution, ResultatTest, SoumissionDevoir, NoteMatiere
 from .serializers import (
     DevoirSerializer, DevoirEtudiantSerializer, SoumissionDevoirSerializer, SoumissionDevoirEtudiantSerializer,
     SoumissionDevoirUpdateSerializer,
     NoteMatiereSerializer, valider_reponses, ATTRIBUT_CORRECTIONS, NON_AUTORISE, contient_non_stockable,
 )
 from .validation import PROFIL_DEVOIR
+from .views_brouillons import BrouillonsMixin
 from .views_execution import ACTIVES, demander_essai, langage_executable
 
 CORRECTEURS = RolePermission(read=CREATEURS, write=CREATEURS)
 MESSAGE_DEJA_SOUMIS = "Vous avez déjà soumis ce devoir."
+MESSAGE_NOTE_VALIDEE = "Votre note est validée : ce devoir ne peut plus être modifié."
 MESSAGE_PAS_OUVERT = "Ce devoir n'est pas ouvert."
 MESSAGE_FERME = "Ce devoir est fermé."
 MESSAGE_SANS_NOTE = "Aucune note proposée : indiquez un score."
@@ -42,6 +45,8 @@ MESSAGE_CORRECTION_ATTENDUE = "Une correction est en cours : attendez son résul
 MESSAGE_DEJA_VALIDEE = "Cette soumission est déjà validée : sa correction ne peut plus être relancée."
 MESSAGE_CORRECTION_EN_FILE = "Une correction est déjà en cours pour cette soumission."
 MESSAGE_RIEN_A_RELANCER = "Aucune correction en erreur à relancer."
+MESSAGE_NOUVELLE_VERSION = "L'étudiant a soumis une nouvelle version : rechargez la soumission."
+MESSAGE_VERSION_INVALIDE = "Le numéro de version doit être un entier positif."
 
 
 def devoirs_visibles_etudiant(user):
@@ -56,7 +61,7 @@ def verifier_fenetre_ouverte(devoir, etudiant):
         raise Conflit(MESSAGE_PAS_OUVERT if fenetre.prochaine_ouverture is not None else MESSAGE_FERME)
 
 
-class DevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
+class DevoirViewSet(BrouillonsMixin, ArchiveMixin, EtablissementScopedMixin, viewsets.ModelViewSet):
     annee_path = 'annee_academique'
     queryset = (
         Devoir.objects.select_related('filiere__etablissement', 'niveau', 'annee_academique', 'cree_par__etablissement',
@@ -199,6 +204,8 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
         qs = super().get_queryset()
         devoir = en_entier(self.request.query_params.get('devoir'))
         qs = qs.filter(devoir_id=devoir) if devoir is not None else qs
+        # L'agrégat supprime le tri du modèle : il est répété ici.
+        qs = qs.annotate(nb_versions=Count('versions', distinct=True)).order_by('-date_soumission', '-pk')
         if self.action == 'list' and self.request.user.role != ETUDIANT:
             # Liste des correcteurs : dernières corrections et statuts de leurs tests, sans les sorties.
             corrections = (Execution.objects.filter(type=Execution.CORRECTION)
@@ -228,13 +235,18 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
             details={'type': 'soumission', 'etudiant': instance.etudiant_id,
                      'avant': {'score': instance.score}, 'apres': None},
         )
-        instance.delete()
+        with transaction.atomic():
+            # Sinon, après la fermeture, la clôture referait une soumission à partir du brouillon gardé.
+            BrouillonExercice.objects.filter(etudiant_id=instance.etudiant_id, exercice__devoir_id=instance.devoir_id).delete()
+            instance.delete()
 
     def create(self, request, *args, **kwargs):
-        """Soumission finale : `{devoir, reponses: [{exercice, fichiers: [{nom, contenu}]}]}`, une seule par devoir.
+        """Soumission finale : `{devoir, reponses: [{exercice, fichiers: [{nom, contenu}]}]}`, une seule par devoir (resoumission
+        possible si le devoir l'autorise).
 
         Ordre des contrôles : devoir visible (400), année archivée (409), fenêtre (409), soumission existante
-        (409), réponses (400) ; la soumission et ses réponses sont créées ensemble, devoir verrouillé, avec leurs
+        (409 : option désactivée, note validée, correction active), réponses (400) ; la soumission et ses réponses
+        sont créées (ou remplacées par une nouvelle version) ensemble, devoir verrouillé, avec leurs
         corrections en file (soumission `en_correction`). Un langage que le service n'exécute pas (`autre`)
         laisse la soumission `soumis`, pour une correction manuelle.
         """
@@ -246,28 +258,50 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
             raise ValidationError({'detail': "Devoir introuvable."})
         verifier_non_archivee(devoir.annee_academique)
         verifier_fenetre_ouverte(devoir, etudiant)
-        if devoir.soumissions.filter(etudiant=etudiant).exists():
-            raise Conflit(MESSAGE_DEJA_SOUMIS)
+        existante = devoir.soumissions.filter(etudiant=etudiant).select_related('devoir').first()
+        if existante is not None:
+            versions.verifier_resoumission(existante)
+        resoumission = False
         try:
             with transaction.atomic():
                 # Verrou partagé avec la modification des exercices : ils ne changent pas pendant l'écriture.
-                Devoir.objects.select_for_update().get(pk=devoir.pk)
+                devoir = Devoir.objects.select_for_update().get(pk=devoir.pk)
+                # Archive et fenêtre relues sous verrou (année rechargée en base), y compris à la première soumission.
+                verifier_non_archivee(devoir.annee_academique)
+                verifier_fenetre_ouverte(devoir, etudiant)
+                soumission = (SoumissionDevoir.objects.select_for_update(of=('self',)).select_related('devoir', 'etudiant')
+                              .filter(devoir=devoir, etudiant=etudiant).first())
+                if soumission is not None:
+                    # État relu sous verrou : 409 avant la validation des réponses (400).
+                    versions.verifier_resoumission(soumission)
                 reponses = valider_reponses(devoir, donnees.get('reponses'))
-                if devoir.soumissions.filter(etudiant=etudiant).exists():
-                    raise Conflit(MESSAGE_DEJA_SOUMIS)
-                soumission = SoumissionDevoir.objects.create(devoir=devoir, etudiant=etudiant)
-                ReponseExercice.objects.bulk_create([
-                    ReponseExercice(soumission=soumission, exercice=exercice, fichiers=fichiers)
-                    for exercice, fichiers in reponses
-                ])
-                if langage_executable(devoir):
-                    # Seule une soumission qui vient d'être créée est mise en correction ici.
-                    file_execution.corriger_soumission(soumission)
+                if soumission is not None:
+                    resoumission = True
+                    versions.resoumettre(soumission, reponses)
+                    transaction.on_commit(lambda s=soumission: accuses.envoyer_accuse(s))
+                else:
+                    soumission = versions.creer_soumission(devoir, etudiant, reponses)
         except IntegrityError:
             # Deux envois simultanés : la contrainte d'unicité tranche, sans erreur 500.
             raise Conflit(MESSAGE_DEJA_SOUMIS)
+        if resoumission:
+            audit_log(self.request, 'resoumission_devoir', cible=soumission,
+                      etablissement=etablissement_evaluation(devoir),
+                      details={'type': 'soumission', 'devoir': devoir.pk, 'version': soumission.numero_version})
         soumission = self.get_queryset().get(pk=soumission.pk)
         return Response(self.get_serializer(soumission).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='versions')
+    def lister_versions(self, request, pk=None):
+        """Versions remplacées, de la plus récente à la plus ancienne (version en cours exclue).
+
+        Correcteur : tout. Étudiant : fichiers toujours ; note et résultats (tests cachés réduits au statut et au
+        temps) seulement si la politique du devoir est `immediate`.
+        """
+        soumission = self.get_object()
+        complet = request.user.role != ETUDIANT
+        visibles = soumission.devoir.politique_resultats == Devoir.IMMEDIATE
+        return Response([versions.donnees_version(v, complet, visibles) for v in soumission.versions.all()])
 
     @action(detail=True, methods=['post'])
     def corriger(self, request, pk=None):
@@ -290,10 +324,18 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
                 raise ValidationError({'score': "Le score doit être un entier."})
             if not 0 <= score <= maximum:
                 raise ValidationError({'score': f"Le score doit être compris entre 0 et {maximum}."})
+        # Facultatif : la version que le correcteur a lue ; une autre version ne reçoit pas cette note.
+        version_lue = donnees.get('numero_version')
+        if version_lue is not None:
+            version_lue = en_entier(version_lue)
+            if version_lue is None or version_lue < 1:
+                raise ValidationError({'numero_version': MESSAGE_VERSION_INVALIDE})
         with transaction.atomic():
             # Relue sous verrou : la note proposée posée entre-temps par le worker est prise en compte.
-            soumission = SoumissionDevoir.objects.select_for_update().select_related('devoir', 'etudiant').get(
+            soumission = SoumissionDevoir.objects.select_for_update(of=('self',)).select_related('devoir', 'etudiant').get(
                 pk=soumission.pk)
+            if version_lue is not None and version_lue != soumission.numero_version:
+                raise Conflit(MESSAGE_NOUVELLE_VERSION)
             avant = soumission.score
             if score is None:
                 if Execution.objects.filter(reponse__soumission=soumission, type=Execution.CORRECTION,
@@ -335,7 +377,9 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
         if not langage_executable(soumission.devoir):
             raise Conflit(MESSAGE_LANGAGE)
         with transaction.atomic():
-            soumission = SoumissionDevoir.objects.select_for_update().select_related('devoir').get(pk=soumission.pk)
+            # Même ordre que la resoumission (devoir, puis soumission) : l'insertion des exécutions référence le devoir.
+            Devoir.objects.select_for_update().get(pk=soumission.devoir_id)
+            soumission = SoumissionDevoir.objects.select_for_update(of=('self',)).select_related('devoir').get(pk=soumission.pk)
             if soumission.statut == SoumissionDevoir.CORRIGE:
                 raise Conflit(MESSAGE_DEJA_VALIDEE)
             if Execution.objects.filter(reponse__soumission=soumission, type=Execution.CORRECTION,
