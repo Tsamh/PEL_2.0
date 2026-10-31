@@ -18,7 +18,7 @@ const MESSAGE_VERROU = 'Ce devoir a déjà des soumissions : ses exercices et se
 const formulaireVide = {
   titre: '', objectifs: '', consignes: '', ressources: [], langage: 'python', politique_resultats: 'apres_validation',
   filiere: '', niveau: '', annee_academique: '', periode: '', ec: '',
-  date_debut: '', date_fin: '', est_publie: false,
+  date_debut: '', date_fin: '', est_publie: false, resoumission_autorisee: false,
   classes: [], groupes: [], etudiants: [],
 };
 
@@ -104,6 +104,7 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
       langage: item.langage, politique_resultats: item.politique_resultats || 'apres_validation',
       filiere: item.filiere || '', niveau: item.niveau || '', annee_academique: item.annee_academique || '', periode: item.periode || '', ec: item.ec || '',
       date_debut: versChampLocal(item.date_debut), date_fin: versChampLocal(item.date_fin), est_publie: item.est_publie,
+      resoumission_autorisee: Boolean(item.resoumission_autorisee),
       classes: item.classes || [], groupes: item.groupes || [], etudiants: item.etudiants || [],
     });
     const charges = (item.exercices || []).map(depuisApi);
@@ -280,6 +281,10 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
                     <label>Fermeture</label>
                     <input type="datetime-local" value={form.date_fin} onChange={(e) => setForm({ ...form, date_fin: e.target.value })} />
                   </div>
+                </div>
+                <div className="form-group">
+                  <label><input type="checkbox" checked={form.resoumission_autorisee} onChange={(e) => setForm({ ...form, resoumission_autorisee: e.target.checked })} style={{ width: 'auto', marginRight: '8px' }} />Autoriser les resoumissions</label>
+                  <small style={styleNote}>L'étudiant peut soumettre de nouvelles versions tant que le devoir est ouvert ; la dernière version compte.</small>
                 </div>
                 {(!soumisAValidation || editingItem?.statut_validation === 'validee') && (
                   <div className="form-group">

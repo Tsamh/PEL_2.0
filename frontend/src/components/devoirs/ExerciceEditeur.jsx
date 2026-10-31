@@ -1,5 +1,5 @@
-import CodeEditor from '../CodeEditor';
-import { BUDGET_TESTS_MS, DIFFICULTES, LIMITES, avecContenuPrincipal, contenuPrincipal, nouveauTest, nouvelExemple } from './exercices';
+import EditeurFichiers from './EditeurFichiers';
+import { BUDGET_TESTS_MS, DIFFICULTES, LIMITES, nomFichier, nouveauTest, nouvelExemple } from './exercices';
 
 const styleBloc = { border: '1px solid var(--gray-200)', borderRadius: '8px', padding: '16px', marginBottom: '12px', background: 'var(--gray-50, #f9fafb)' };
 const styleSousBloc = { border: '1px solid var(--gray-200)', borderRadius: '6px', padding: '8px', marginBottom: '8px', background: 'white' };
@@ -8,14 +8,12 @@ const styleNote = { fontSize: '0.85rem', color: 'var(--gray-500)' };
 const styleLigne = { display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 'normal', margin: 0 };
 const styleCode = { fontFamily: 'monospace', width: '100%' };
 
-function EditeurFichier({ libelle, fichiers, langage, onChange }) {
-  const autres = fichiers.length - 1;
+function ZoneFichiers({ libelle, fichiers, langage, espace, onChange }) {
   return (
     <div className="form-group">
-      <label>{libelle}{fichiers.length > 0 ? ` (${fichiers[0].nom})` : ''}</label>
-      <CodeEditor language={langage} value={contenuPrincipal(fichiers)} height="200px"
-        onChange={(contenu) => onChange(avecContenuPrincipal(fichiers, contenu, langage))} />
-      {autres > 0 && <small style={styleNote}>Autres fichiers conservés sans modification : {fichiers.slice(1).map((f) => f.nom).join(', ')}.</small>}
+      <label>{libelle}</label>
+      <EditeurFichiers fichiers={fichiers} langage={langage} espace={espace} height="200px"
+        principal={langage === 'autre' ? null : nomFichier(langage)} onChange={onChange} />
     </div>
   );
 }
@@ -130,9 +128,9 @@ export default function ExerciceEditeur({ exercice: e, index, langage, competenc
         ))}
       </div>
 
-      <EditeurFichier libelle="Fichier de départ (fourni aux étudiants)" fichiers={e.fichiers_initiaux} langage={langage}
+      <ZoneFichiers libelle="Fichiers de départ (fournis aux étudiants)" fichiers={e.fichiers_initiaux} langage={langage} espace={`${e.cle}/depart`}
         onChange={(fichiers) => onChange({ fichiers_initiaux: fichiers })} />
-      <EditeurFichier libelle="Solution de référence (jamais montrée aux étudiants)" fichiers={e.solution} langage={langage}
+      <ZoneFichiers libelle="Solution de référence (jamais montrée aux étudiants)" fichiers={e.solution} langage={langage} espace={`${e.cle}/solution`}
         onChange={(fichiers) => onChange({ solution: fichiers })} />
 
       <div className="form-group" style={{ marginBottom: 0 }}>
