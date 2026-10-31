@@ -4,22 +4,40 @@ import api from '../../services/api';
 import { chargerTout } from '../../services/pagination';
 import { messageErreur } from '../../services/erreurs';
 import { useAuth } from '../../context/AuthContext';
-import CodeEditor from '../../components/CodeEditor';
 import CountdownTimer from '../../components/CountdownTimer';
 import ApercuDevoir, { Exemples, ListeRessources, TableTests } from '../../components/devoirs/ApercuDevoir';
-import { DIFFICULTES, LANGAGES, avecContenuPrincipal, contenuPrincipal, nomFichier } from '../../components/devoirs/exercices';
+import EditeurFichiers from '../../components/devoirs/EditeurFichiers';
+import { DIFFICULTES, LANGAGES, nomFichier } from '../../components/devoirs/exercices';
+import HistoriqueVersions from '../../components/devoirs/HistoriqueVersions';
 import ResultatsExecution from '../../components/devoirs/ResultatsExecution';
 import { STATUTS_SOUMISSION, executionActive } from '../../components/devoirs/statuts';
+import useBrouillons, { lireLocal } from './useBrouillons';
 
 const formatDate = (iso) => (iso ? new Date(iso).toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' }) : '');
 const styleTexte = { whiteSpace: 'pre-wrap', color: 'var(--gray-700)', margin: '4px 0' };
 const styleNote = { fontSize: '0.85rem', color: 'var(--gray-500)' };
 const styleCode = { fontFamily: 'monospace', width: '100%' };
 
-// Fichiers de travail d'un exercice : copie des fichiers de départ (un fichier principal au moins).
-const fichiersDeDepart = (exercice, langage) => {
+// Fichiers de départ d'un exercice : le fichier principal est ajouté s'il manque (un fichier au moins).
+const fichiersDeDepart = (exercice, devoir) => {
   const fichiers = (exercice.fichiers_initiaux || []).map((f) => ({ nom: f.nom, contenu: f.contenu }));
-  return fichiers.length > 0 ? fichiers : [{ nom: nomFichier(langage), contenu: '' }];
+  const principal = devoir.fichier_principal || null;
+  if (principal && !fichiers.some((f) => f.nom === principal)) fichiers.unshift({ nom: principal, contenu: '' });
+  return fichiers.length > 0 ? fichiers : [{ nom: nomFichier(devoir.langage), contenu: '' }];
+};
+
+const plein = (fichiers) => (Array.isArray(fichiers) && fichiers.length > 0 ? fichiers : null);
+// Contenu du fichier principal (par son nom) ; à défaut de nom connu, celui du premier fichier.
+const contenuPrincipalDe = (fichiers, principal) => (principal ? fichiers.find((f) => f.nom === principal) : fichiers[0])?.contenu ?? '';
+
+const libelleEnregistrement = (etat) => {
+  if (!etat) return '';
+  if (etat.statut === 'enregistre') {
+    const h = etat.heure;
+    return `Enregistré à ${h.getHours()} h ${String(h.getMinutes()).padStart(2, '0')}`;
+  }
+  if (etat.statut === 'en_cours') return 'Enregistrement en cours...';
+  return etat.conflit ? 'Non enregistré : ce devoir ne peut plus être modifié.' : 'Non enregistré : nouvelle tentative...';
 };
 
 // Avance de la soumission automatique sur l'heure de fermeture effective.
@@ -28,22 +46,6 @@ const AVANCE_AUTO_MS = 30000;
 const INTERVALLE_ESSAI_MS = 1000;
 const INTERVALLE_CORRECTION_MS = 3000;
 const MESSAGE_EN_COURS = 'Une exécution est déjà en cours.';
-
-// Brouillon du code d'un exercice, gardé le temps de l'onglet (le stockage peut être indisponible).
-const cleBrouillon = (devoirId, exerciceId) => `pel-brouillon-devoir-${devoirId}-${exerciceId}`;
-const lireBrouillon = (devoirId, exerciceId) => {
-  try {
-    const brut = window.sessionStorage.getItem(cleBrouillon(devoirId, exerciceId));
-    const fichiers = brut ? JSON.parse(brut) : null;
-    return Array.isArray(fichiers) && fichiers.length > 0 ? fichiers : null;
-  } catch { return null; }
-};
-const ecrireBrouillon = (devoirId, exerciceId, fichiers) => {
-  try { window.sessionStorage.setItem(cleBrouillon(devoirId, exerciceId), JSON.stringify(fichiers)); } catch { /* stockage indisponible */ }
-};
-const effacerBrouillons = (devoirId, exercices) => {
-  try { exercices.forEach((ex) => window.sessionStorage.removeItem(cleBrouillon(devoirId, ex.id))); } catch { /* stockage indisponible */ }
-};
 
 function ApercuGestion({ id }) {
   const navigate = useNavigate();
@@ -74,7 +76,11 @@ function DevoirEtudiant({ id }) {
   const navigate = useNavigate();
   const [devoir, setDevoir] = useState(null);
   const [soumission, setSoumission] = useState(null);
+  // `fichiers` : copie de travail par exercice (absente tant que l'étudiant n'a rien modifié) ;
+  // `brouillons` : brouillons lus sur le serveur au chargement.
   const [fichiers, setFichiers] = useState({});
+  const [brouillons, setBrouillons] = useState({});
+  const [brouillonsIndisponibles, setBrouillonsIndisponibles] = useState(false);
   const [essais, setEssais] = useState({});
   const [entrees, setEntrees] = useState({});
   const [loading, setLoading] = useState(true);
@@ -84,6 +90,11 @@ function DevoirEtudiant({ id }) {
   const autoLance = useRef(false);
   const envoiRef = useRef(null);
   const minuteurs = useRef({});
+  const fichiersRef = useRef({});
+  const chargerRef = useRef(null);
+  const { enregistrer, etats, charger: lireBrouillons, confirmer } = useBrouillons(id, { surConflit: () => chargerRef.current?.() });
+
+  useEffect(() => { fichiersRef.current = fichiers; });
 
   // Toute interrogation s'arrête au démontage de la page.
   useEffect(() => {
@@ -98,44 +109,81 @@ function DevoirEtudiant({ id }) {
 
   const charger = useCallback(async () => {
     try {
-      const [res, subs] = await Promise.all([
+      const [res, subs, serveur] = await Promise.all([
         api.get(`/programming/devoirs/${id}/`),
         chargerTout('/programming/soumissions/', { devoir: id }),
+        lireBrouillons(),
       ]);
+      const sub = subs.find((s) => s.devoir === res.data.id) || null;
       setDevoir(res.data);
-      setSoumission(subs.find((s) => s.devoir === res.data.id) || null);
-      // Les fichiers en cours d'édition sont gardés ; seuls les exercices nouveaux partent du fichier de départ.
-      // Un brouillon de l'onglet remplace le fichier de départ tant que le devoir n'est pas soumis.
-      const dejaSoumis = Boolean(res.data.etat?.soumis || subs.some((s) => s.devoir === res.data.id));
-      setFichiers((avant) => Object.fromEntries(res.data.exercices.map((ex) => [
-        ex.id,
-        avant[ex.id] || (!dejaSoumis && lireBrouillon(res.data.id, ex.id)) || fichiersDeDepart(ex, res.data.langage),
-      ])));
+      setSoumission(sub);
+      // Les brouillons du serveur ne touchent jamais une copie de travail déjà en cours.
+      if (serveur) setBrouillons(serveur);
+      setBrouillonsIndisponibles(!serveur);
+      // Une copie de l'onglet non confirmée par le serveur reprend la place de la copie de travail et repart au serveur.
+      const modifiable = (Boolean(res.data.etat?.ouvert) && !res.data.etat?.soumis && !sub) || Boolean(sub?.resoumission_possible);
+      if (modifiable) {
+        res.data.exercices.forEach((ex) => {
+          const locale = fichiersRef.current[ex.id] ? null : lireLocal(id, ex.id);
+          if (!locale) return;
+          setFichiers((avant) => (avant[ex.id] ? avant : { ...avant, [ex.id]: locale }));
+          enregistrer(ex.id, locale);
+        });
+      }
       setError('');
     } catch (err) {
       setError(messageErreur(err, 'Devoir introuvable.'));
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, lireBrouillons, enregistrer]);
 
-  useEffect(() => { charger(); }, [charger]);
+  useEffect(() => { chargerRef.current = charger; charger(); }, [charger]);
+
+  const rendusDe = (ex) => plein(soumission?.reponses?.find((r) => r.exercice === ex.id)?.fichiers);
+  // Copie de travail : celle en cours, sinon copie de l'onglet, brouillon du serveur, version rendue, fichiers de départ.
+  const travail = (ex) => fichiers[ex.id]
+    ?? plein(lireLocal(id, ex.id)) ?? plein(brouillons[ex.id]) ?? rendusDe(ex) ?? fichiersDeDepart(ex, devoir);
+  const modifier = (ex, maj) => {
+    setFichiers((f) => ({ ...f, [ex.id]: maj }));
+    enregistrer(ex.id, maj);
+  };
+  // « Reprendre ce code » : la version remplace la copie de travail des exercices qu'elle contient (rien n'est soumis).
+  const reprendre = (version) => {
+    version.reponses.forEach((r) => {
+      const ex = devoir.exercices.find((e) => e.id === r.exercice);
+      if (ex && plein(r.fichiers)) modifier(ex, r.fichiers.map((f) => ({ nom: f.nom, contenu: f.contenu })));
+    });
+    setMessage(`Le code de la version ${version.numero} est repris dans l'éditeur : soumettez une nouvelle version pour le rendre.`);
+  };
 
   // Envoi du devoir ; en mode automatique, ni confirmation ni blocage par le chargement.
   const envoyer = async (auto) => {
     if (!devoir) return;
-    if (!auto && !window.confirm('Soumettre le devoir ? Le code de tous les exercices sera rendu et ne pourra plus être modifié.')) return;
+    const nouvelleVersion = Boolean(soumission);
+    const confirmation = nouvelleVersion
+      ? 'Soumettre une nouvelle version ? La version précédente sera remplacée et la correction recommencera.'
+      : 'Soumettre le devoir ? Le code de tous les exercices sera rendu et ne pourra plus être modifié.';
+    if (!auto && !window.confirm(confirmation)) return;
     setSubmitting(true);
     setError('');
     setMessage('');
+    const copies = devoir.exercices.map((ex) => [ex.id, travail(ex)]);
     try {
       const res = await api.post('/programming/soumissions/', {
         devoir: devoir.id,
-        reponses: devoir.exercices.map((ex) => ({ exercice: ex.id, fichiers: fichiers[ex.id] })),
+        reponses: copies.map(([exercice, fichiersEnvoyes]) => ({ exercice, fichiers: fichiersEnvoyes })),
       });
       setSoumission(res.data);
-      effacerBrouillons(devoir.id, devoir.exercices);
-      setMessage(auto ? 'Le délai se termine : votre devoir a été soumis automatiquement.' : 'Votre devoir a été soumis.');
+      // Plus aucun envoi de brouillon en attente ; la copie de travail reste celle qui vient d'être rendue.
+      confirmer(copies.map(([exercice]) => exercice));
+      setFichiers(Object.fromEntries(copies));
+      // Le serveur garde les brouillons quand la resoumission est permise : le dernier est remis à jour.
+      if (devoir.resoumission_autorisee && !auto) copies.forEach(([exercice, fichiersEnvoyes]) => enregistrer(exercice, fichiersEnvoyes));
+      let texte = 'Votre devoir a été soumis.';
+      if (auto) texte = 'Le délai se termine : votre devoir a été soumis automatiquement.';
+      else if (nouvelleVersion) texte = 'Votre nouvelle version a été soumise.';
+      setMessage(texte);
       charger();
     } catch (err) {
       setError(messageErreur(err, 'Erreur lors de la soumission.'));
@@ -188,8 +236,10 @@ function DevoirEtudiant({ id }) {
 
   const etat = devoir.etat || {};
   const soumis = Boolean(etat.soumis || soumission);
-  const editable = Boolean(etat.ouvert) && !soumis;
-  const reponses = Object.fromEntries((soumission?.reponses || []).map((r) => [r.exercice, r.fichiers]));
+  // Pendant une correction, `resoumission_possible` est faux : l'éditeur passe en lecture seule sur le code rendu,
+  // puis revient à la fin avec la copie de travail intacte.
+  const editable = (Boolean(etat.ouvert) && !soumis) || Boolean(soumission?.resoumission_possible);
+  const principal = devoir.fichier_principal || null;
 
   const executable = devoir.langage !== 'autre';
   // Une seule exécution à la fois par utilisateur : les boutons de tous les exercices attendent la fin.
@@ -212,7 +262,7 @@ function DevoirEtudiant({ id }) {
   const executer = async (exercice, mode) => {
     majEssai(exercice.id, { envoi: true });
     try {
-      const corps = { exercice: exercice.id, fichiers: fichiers[exercice.id], mode };
+      const corps = { exercice: exercice.id, fichiers: travail(exercice), mode };
       if (mode === 'run') corps.entree = entrees[exercice.id] || '';
       const res = await api.post(`/programming/devoirs/${id}/executer/`, corps);
       majEssai(exercice.id, { execution: { ...res.data, type: mode === 'run' ? 'essai_run' : 'essai_test' } });
@@ -266,6 +316,9 @@ function DevoirEtudiant({ id }) {
       {message && <div className="alert alert-success">{message}</div>}
       {error && <div className="alert alert-error">{error}</div>}
       {messageFenetre && <div className="alert alert-error">{messageFenetre}</div>}
+      {brouillonsIndisponibles && editable && (
+        <div className="alert alert-error">Votre brouillon enregistré n'a pas pu être relu : rechargez la page avant de modifier votre code.</div>
+      )}
 
       {soumis && (
         <div className="form-card" style={{ marginBottom: '24px' }}>
@@ -274,7 +327,13 @@ function DevoirEtudiant({ id }) {
             <span className={`badge ${soumission?.statut === 'corrige' ? 'badge-active' : 'badge-inactive'}`}>
               {STATUTS_SOUMISSION[soumission?.statut] || 'Soumis'}
             </span>
-            {soumission?.date_soumission && <span style={{ ...styleNote, marginLeft: '12px' }}>Rendu le {formatDate(soumission.date_soumission)}</span>}
+            {soumission?.date_soumission && (
+              <span style={{ ...styleNote, marginLeft: '12px' }}>
+                Rendu le {formatDate(soumission.date_soumission)}
+                {soumission.numero_version > 1 && `, version ${soumission.numero_version}`}
+                {soumission.soumission_auto && ' (soumission automatique)'}
+              </span>
+            )}
             {aUneNote && <span style={{ marginLeft: '12px', fontWeight: 600, fontSize: '1.1rem' }}>Note : {soumission.score} / {Number(soumission.bareme ?? devoir.bareme)}</span>}
             {aUneNoteProposee && (
               <span style={{ marginLeft: '12px', fontWeight: 600, fontSize: '1.1rem' }}>
@@ -294,8 +353,9 @@ function DevoirEtudiant({ id }) {
       )}
 
       {devoir.exercices.map((ex, i) => {
-        const rendus = reponses[ex.id];
-        const affiches = soumis ? rendus : fichiers[ex.id];
+        const rendus = rendusDe(ex);
+        // Copie de travail si l'éditeur est actif ou si rien n'a été rendu ; sinon le code rendu.
+        const affiches = editable || !soumis ? travail(ex) : rendus;
         return (
           <div key={ex.id} className="form-card" style={{ marginBottom: '24px' }}>
             <h3 style={{ marginBottom: '4px' }}>Exercice {i + 1} : {ex.titre}</h3>
@@ -309,18 +369,16 @@ function DevoirEtudiant({ id }) {
             {ex.tests_publics?.length > 0 && <div style={{ marginTop: '8px' }}><strong>Tests publics</strong><TableTests tests={ex.tests_publics} /></div>}
 
             <div style={{ marginTop: '12px' }}>
-              {soumis && !rendus ? (
+              {!affiches ? (
                 <p style={styleNote}>Aucune réponse rendue pour cet exercice.</p>
               ) : (
                 <>
-                  <strong>{soumis ? 'Code rendu' : 'Votre code'} ({affiches[0]?.nom})</strong>
-                  <CodeEditor language={devoir.langage} value={contenuPrincipal(affiches)} readOnly={!editable} height="300px"
-                    onChange={editable ? (contenu) => {
-                      const maj = avecContenuPrincipal(fichiers[ex.id], contenu, devoir.langage);
-                      ecrireBrouillon(devoir.id, ex.id, maj);
-                      setFichiers((f) => ({ ...f, [ex.id]: maj }));
-                    } : undefined} />
-                  {affiches.length > 1 && <small style={styleNote}>Autres fichiers {soumis ? 'rendus' : 'conservés'} : {affiches.slice(1).map((f) => f.nom).join(', ')}.</small>}
+                  <strong>{soumis && !editable ? 'Code rendu' : 'Votre code'}</strong>
+                  <EditeurFichiers fichiers={affiches} langage={devoir.langage} principal={principal} readOnly={!editable} height="300px"
+                    espace={`${editable ? 'travail' : 'rendu'}-${ex.id}`} onChange={(maj) => modifier(ex, maj)} />
+                  {editable && etats[ex.id] && (
+                    <small role="status" style={{ ...styleNote, display: 'block', marginTop: '4px' }}>{libelleEnregistrement(etats[ex.id])}</small>
+                  )}
                 </>
               )}
             </div>
@@ -334,9 +392,9 @@ function DevoirEtudiant({ id }) {
                 </div>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                   <button type="button" className="btn btn-secondary" onClick={() => executer(ex, 'run')}
-                    disabled={essaiActif || !contenuPrincipal(fichiers[ex.id]).trim()}>Exécuter</button>
+                    disabled={essaiActif || !contenuPrincipalDe(affiches, principal).trim()}>Exécuter</button>
                   <button type="button" className="btn btn-secondary" onClick={() => executer(ex, 'test')}
-                    disabled={essaiActif || !ex.tests_publics?.length || !contenuPrincipal(fichiers[ex.id]).trim()}>Tester</button>
+                    disabled={essaiActif || !ex.tests_publics?.length || !contenuPrincipalDe(affiches, principal).trim()}>Tester</button>
                   <span style={styleNote}>
                     {ex.tests_publics?.length > 0 ? "« Tester » lance le code sur les tests publics de l'exercice." : "Cet exercice n'a pas de test public."}
                   </span>
@@ -361,10 +419,18 @@ function DevoirEtudiant({ id }) {
         );
       })}
 
+      {soumission?.nombre_versions > 0 && (
+        <div className="form-card" style={{ marginBottom: '24px' }}>
+          <h3>Versions précédentes</h3>
+          <HistoriqueVersions key={`${soumission.id}-${soumission.numero_version}`} soumissionId={soumission.id}
+            langage={devoir.langage} principal={principal} onReprendre={editable ? reprendre : undefined} />
+        </div>
+      )}
+
       {editable && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '24px' }}>
           <button className="btn btn-primary" onClick={() => envoyer(false)} disabled={submitting || devoir.exercices.length === 0}>
-            {submitting ? 'Soumission...' : 'Soumettre le devoir'}
+            {submitting ? 'Soumission...' : (soumission ? 'Soumettre une nouvelle version' : 'Soumettre le devoir')}
           </button>
         </div>
       )}

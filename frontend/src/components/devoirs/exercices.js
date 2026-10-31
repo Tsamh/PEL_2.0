@@ -45,12 +45,6 @@ export const depuisApi = (e) => ({
   tests: (e.tests || []).map((t) => ({ entree: t.entree, sortie_attendue: t.sortie_attendue, public: t.public, poids: t.poids })),
 });
 
-// Contenu du fichier principal (le premier de la liste) et mise à jour de ce seul fichier.
-export const contenuPrincipal = (fichiers) => (fichiers.length > 0 ? fichiers[0].contenu : '');
-export const avecContenuPrincipal = (fichiers, contenu, langage) => (fichiers.length > 0
-  ? fichiers.map((f, i) => (i === 0 ? { ...f, contenu } : f))
-  : [{ nom: nomFichier(langage), contenu }]);
-
 // Changement de langage : les fichiers main.<ext> d'un langage connu (Main.java pour Java) prennent le nom du nouveau langage.
 export const renommerFichiers = (fichiers, langage) => fichiers.map((f) => {
   const [base, ext, ...reste] = f.nom.split('.');

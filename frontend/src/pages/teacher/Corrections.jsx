@@ -4,6 +4,7 @@ import api from '../../services/api';
 import { messageErreur } from '../../services/erreurs';
 import { chargerTout } from '../../services/pagination';
 import CodeEditor from '../../components/CodeEditor';
+import HistoriqueVersions from '../../components/devoirs/HistoriqueVersions';
 import ResultatsExecution from '../../components/devoirs/ResultatsExecution';
 import { LANGAGES } from '../../components/devoirs/exercices';
 import { STATUTS_SOUMISSION, executionActive } from '../../components/devoirs/statuts';
@@ -213,7 +214,16 @@ export default function Corrections() {
               {soumissions.map((sub) => (
                 <tr key={sub.id}>
                   <td><strong>{sub.etudiant_nom}</strong></td>
-                  <td>{new Date(sub.date_soumission).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
+                  <td>
+                    {new Date(sub.date_soumission).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    {(sub.numero_version > 1 || sub.soumission_auto) && (
+                      <div style={styleNote}>
+                        {sub.numero_version > 1 && `Version ${sub.numero_version}`}
+                        {sub.numero_version > 1 && sub.soumission_auto && ', '}
+                        {sub.soumission_auto && 'Soumission automatique'}
+                      </div>
+                    )}
+                  </td>
                   {executable && (
                     <>
                       <td>{resumeTests(sub)}</td>
@@ -245,6 +255,8 @@ export default function Corrections() {
               {erreurModale && <div className="alert alert-error">{erreurModale}</div>}
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' }}>
                 {badgeSoumission(selected.statut)}
+                <span style={{ fontWeight: 600 }}>Version {selected.numero_version}</span>
+                {selected.soumission_auto && <span className="badge badge-inactive">Soumission automatique</span>}
                 {executable && (
                   <span style={{ fontWeight: 600 }}>
                     Note proposée : {noteProposee !== null ? `${noteProposee} / ${Number(devoir?.bareme)}` : '-'}
@@ -285,6 +297,12 @@ export default function Corrections() {
                   </div>
                 );
               })}
+              {selected.nombre_versions > 0 && (
+                <div style={{ marginBottom: '20px' }}>
+                  <HistoriqueVersions key={`${selected.id}-${selected.numero_version}`} soumissionId={selected.id}
+                    langage={devoir?.langage} principal={devoir?.fichier_principal || null} />
+                </div>
+              )}
               <div className="form-row">
                 <div className="form-group" style={{ flex: '0 0 180px' }}>
                   <label>Note / {noteMax}</label>

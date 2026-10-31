@@ -13,14 +13,16 @@ function langageDe(nom, langage, principal) {
   return (point > 0 && LANGAGES_EXTENSION[nom.slice(point + 1).toLowerCase()]) || 'plaintext';
 }
 
+// Les modèles Monaco survivent au composant : les identifiants ne repartent jamais de 1 pendant la vie de la page.
+let prochainId = 1;
+
 // Identifiant stable par nom de fichier : le modèle Monaco (clé = path) survit aux renommages mais pas aux
 // suppressions ni aux fichiers qui apparaissent de l'extérieur. Renvoie `ids` tel quel s'il est à jour.
 function synchroniser(ids, fichiers) {
   const map = new Map();
-  let next = ids.next;
-  for (const f of fichiers) map.set(f.nom, ids.map.get(f.nom) ?? next++);
-  const identique = map.size === ids.map.size && [...map].every(([nom, id]) => ids.map.get(nom) === id);
-  return identique ? ids : { map, next };
+  for (const f of fichiers) map.set(f.nom, ids.get(f.nom) ?? prochainId++);
+  const identique = map.size === ids.size && [...map].every(([nom, id]) => ids.get(nom) === id);
+  return identique ? ids : map;
 }
 
 const styleBarre = { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px', marginBottom: '6px' };
@@ -40,7 +42,7 @@ export default function EditeurFichiers({
   // saisie : { mode: 'ajout' | 'renommage', valeur, ancien } ou null.
   const [saisie, setSaisie] = useState(null);
   const [erreur, setErreur] = useState('');
-  const [ids, setIds] = useState({ map: new Map(), next: 1 });
+  const [ids, setIds] = useState(() => new Map());
   const editeur = useRef(null);
 
   const idsAJour = synchroniser(ids, fichiers);
@@ -75,10 +77,10 @@ export default function EditeurFichiers({
       onChange(ajouter(fichiers, nom));
       choisir(nom, fichiers.length);
     } else {
-      const map = new Map(idsAJour.map);
+      const map = new Map(idsAJour);
       map.set(nom, map.get(saisie.ancien));
       map.delete(saisie.ancien);
-      setIds({ map, next: idsAJour.next });
+      setIds(map);
       onChange(renommer(fichiers, saisie.ancien, nom));
       choisir(nom, position);
     }
@@ -154,7 +156,7 @@ export default function EditeurFichiers({
 
       {courant ? (
         <CodeEditor language={langageDe(courant.nom, langage, principal)} value={courant.contenu} readOnly={readOnly}
-          height={height} path={`${espace}/${idsAJour.map.get(courant.nom)}`} onChange={modifierContenu}
+          height={height} path={`${espace}/${idsAJour.get(courant.nom)}`} onChange={modifierContenu}
           onMount={(ed) => { editeur.current = ed; }} />
       ) : (
         <p style={styleNote}>{readOnly ? 'Aucun fichier.' : 'Aucun fichier : ajoutez-en un avec « + Fichier ».'}</p>
