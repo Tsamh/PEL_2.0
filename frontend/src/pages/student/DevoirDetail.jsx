@@ -29,12 +29,13 @@ const fichiersDeDepart = (exercice, devoir) => {
 const plein = (fichiers) => (Array.isArray(fichiers) && fichiers.length > 0 ? fichiers : null);
 const memesFichiers = (a, b) => Boolean(b) && a.length === b.length && a.every((f) => b.some((g) => g.nom === f.nom && g.contenu === f.contenu));
 // Travail resté hors de ce qui est rendu, à signaler : { fichiers, enregistre } ou null. Après un rendu, seul un texte
-// plus récent que ce rendu compte, sauf s'il vient d'être refusé (409) ; hors édition, le brouillon du serveur compte aussi.
-function travailHorsRendu({ copie, brouillon, reference, dateRendu, conflit, soumis, editable }) {
+// plus récent que ce rendu compte, sauf s'il vient d'être refusé (409) ou si le rendu est automatique (un brouillon plus
+// ancien soumis par la clôture : ce texte n'a jamais été rendu) ; hors édition, le brouillon du serveur compte aussi.
+function travailHorsRendu({ copie, brouillon, reference, dateRendu, conflit, soumis, auto, editable }) {
   if (editable && !conflit) return null;
   const differe = (liste) => !memesFichiers(liste, reference);
   const apresRendu = (date) => !dateRendu || (Boolean(date) && date > new Date(dateRendu).getTime());
-  const copieRetenue = copie && differe(copie.fichiers) && (conflit || !soumis || apresRendu(copie.date));
+  const copieRetenue = copie && differe(copie.fichiers) && (conflit || !soumis || auto || apresRendu(copie.date));
   const enregistre = soumis && !editable ? plein(brouillon?.fichiers) : null;
   const brouillonRetenu = enregistre && differe(enregistre) && apresRendu(new Date(brouillon.modifie_le).getTime());
   if (copieRetenue && (conflit || !brouillonRetenu || copieGagne(copie.date, brouillon))) return { fichiers: copie.fichiers, enregistre: false };
@@ -240,7 +241,7 @@ function DevoirEtudiant({ id, utilisateurId }) {
     const nouvelleVersion = Boolean(soumission);
     const confirmation = nouvelleVersion
       ? 'Soumettre une nouvelle version ? La version précédente sera remplacée et la correction recommencera.'
-      : 'Soumettre le devoir ? Le code de tous les exercices sera rendu et ne pourra plus être modifié.';
+      : `Soumettre le devoir ? Le code de tous les exercices sera rendu${devoir.resoumission_autorisee ? '. Vous pourrez soumettre une nouvelle version tant que le devoir reste ouvert.' : ' et ne pourra plus être modifié.'}`;
     if (!auto && !window.confirm(confirmation)) return;
     setSubmitting(true);
     setError('');
@@ -467,8 +468,11 @@ function DevoirEtudiant({ id, utilisateurId }) {
         const affiches = editable || (!soumis && !reference) ? travail(ex) : reference;
         const copie = fichiers[ex.id] ? { fichiers: fichiers[ex.id], date: frappeDe(ex.id) } : lireCopie(ex.id);
         const horsRendu = (soumis || !brouillonsIndisponibles) && travailHorsRendu({
-          copie, brouillon: brouillons[ex.id], reference, dateRendu: soumission?.date_soumission, conflit: etats[ex.id]?.conflit, soumis, editable,
+          copie, brouillon: brouillons[ex.id], reference, dateRendu: soumission?.date_soumission, conflit: etats[ex.id]?.conflit, soumis, auto: soumission?.soumission_auto, editable,
         });
+        // Déjà rendu et encore modifiable : « Enregistré à... » ne veut pas dire « sera soumis » (la clôture ne remplace pas une version).
+        const aDuTravail = fichiers[ex.id] || plein(brouillons[ex.id]?.fichiers);
+        const nonSoumis = editable && soumission && aDuTravail && !horsRendu && !compteRemplace && !memesFichiers(travail(ex), rendusDe(ex));
         let messageHorsRendu = "Votre copie de travail n'a pas été enregistrée : ces modifications ne seront pas soumises.";
         if (horsRendu && horsRendu.enregistre) {
           // Pendant une correction, l'édition peut revenir : le travail enregistré peut encore être soumis.
@@ -497,6 +501,11 @@ function DevoirEtudiant({ id, utilisateurId }) {
                     espace={`${editable ? 'travail' : 'rendu'}-${ex.id}-v${soumission?.numero_version ?? 0}`} onChange={(maj) => modifier(ex, maj)} />
                   {editable && !compteRemplace && etats[ex.id] && (
                     <small role="status" style={{ ...styleNote, display: 'block', marginTop: '4px' }}>{libelleEnregistrement(etats[ex.id])}</small>
+                  )}
+                  {nonSoumis && (
+                    <div className="alert alert-error" style={{ marginTop: '8px' }}>
+                      Vos modifications enregistrées ne sont pas soumises : à la fermeture, seule la version {soumission.numero_version} compte. Cliquez sur « Soumettre une nouvelle version ».
+                    </div>
                   )}
                 </>
               )}

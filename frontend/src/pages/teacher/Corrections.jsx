@@ -118,12 +118,26 @@ export default function Corrections() {
       await api.post(`/programming/soumissions/${selected.id}/corriger/`, {
         score: score.trim() !== '' ? score.trim() : null,
         commentaire,
+        numero_version: selected.numero_version,
       });
       setMessage('Note validée.');
       setSelected(null);
       rechargerListe().catch((err) => setError(messageErreur(err, 'Erreur lors du chargement.')));
     } catch (err) {
       setErreurModale(messageErreur(err, 'Erreur lors de la sauvegarde.'));
+      // Nouvelle version ou correction en cours : le détail affiché est relu ; la note et les remarques saisies restent.
+      if (err.response?.status === 409) {
+        setChargementDetail(true);
+        try {
+          const res = await api.get(`/programming/soumissions/${selected.id}/`);
+          setSelected(siToujoursOuverte(res.data));
+          rechargerListe().catch(() => {});
+        } catch {
+          /* Le message du refus reste affiché : la prochaine tentative sera de nouveau refusée. */
+        } finally {
+          setChargementDetail(false);
+        }
+      }
     } finally {
       setSaving(false);
     }

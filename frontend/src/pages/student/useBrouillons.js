@@ -154,13 +154,16 @@ export function creerEnregistreur({
 const actifs = new Set();
 
 // À appeler avant de retirer les jetons (déconnexion explicite) : l'envoi final part avec le jeton encore valable, et
-// aucune copie non confirmée ne reste pour le prochain compte. Une session expirée (401) ne passe pas ici : la copie
-// reste sous la clé de l'étudiant, qui la retrouve en se reconnectant.
+// la copie non confirmée de ce compte ne reste pas après lui ; celles d'un autre compte, encore ouvert dans un onglet
+// bloqué, restent sous leur clé. Une session expirée (401) ne passe pas ici : la copie reste sous la clé de l'étudiant,
+// qui la retrouve en se reconnectant.
 export function avantDeconnexion() {
   const jeton = window.localStorage.getItem('access_token');
   actifs.forEach((figer) => figer(jeton));
+  const compte = compteDuJeton(jeton);
+  if (compte === null) return;
   try {
-    Object.keys(window.sessionStorage).filter((cle) => cle.startsWith(PREFIXE_LOCAL))
+    Object.keys(window.sessionStorage).filter((cle) => cle.startsWith(`${PREFIXE_LOCAL}u${compte}-`))
       .forEach((cle) => window.sessionStorage.removeItem(cle));
   } catch { /* stockage indisponible */ }
 }
