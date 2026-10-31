@@ -261,6 +261,9 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
             with transaction.atomic():
                 # Verrou partagé avec la modification des exercices : ils ne changent pas pendant l'écriture.
                 devoir = Devoir.objects.select_for_update().get(pk=devoir.pk)
+                # Archive et fenêtre relues sous verrou (année rechargée en base), y compris à la première soumission.
+                verifier_non_archivee(devoir.annee_academique)
+                verifier_fenetre_ouverte(devoir, etudiant)
                 soumission = (SoumissionDevoir.objects.select_for_update().select_related('devoir', 'etudiant')
                               .filter(devoir=devoir, etudiant=etudiant).first())
                 if soumission is not None:

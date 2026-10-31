@@ -113,6 +113,11 @@ class ControlesTests(Base):
         res = self.etu.post(f'{P}/soumissions/', {'devoir': self.a.devoir.id, 'reponses': []}, format='json')
         self.assertEqual(res.status_code, 400)
         self.assertFalse(VersionSoumission.objects.exists())
+        # Un conflit d'état l'emporte sur des réponses invalides.
+        AnneeAcademique.objects.filter(pk=self.a.annee.pk).update(archivee=True)
+        res = self.etu.post(f'{P}/soumissions/', {'devoir': self.a.devoir.id, 'reponses': []}, format='json')
+        self.assertEqual(res.status_code, 409)
+        self.assertFalse(VersionSoumission.objects.exists())
 
     def test_fenetre_fermee_409(self):
         self.premiere_version()
@@ -155,6 +160,53 @@ class ControlesTests(Base):
         self.assertEqual(len(appels), 2)
         self.assertEqual((res.status_code, str(res.data['detail'])), (409, NOTE_VALIDEE))
         self.assertFalse(VersionSoumission.objects.exists())
+
+    def _change_apres_premier_controle(self, cible, changement):
+        """Applique `changement` juste après le premier appel du contrôle `cible`, avant le verrou."""
+        from programming import views
+        reel = getattr(views, cible)
+        appels = []
+
+        def enveloppe(*args):
+            appels.append(1)
+            if len(appels) == 1:
+                changement()
+            return reel(*args)
+
+        return appels, mock.patch(f'programming.views.{cible}', side_effect=enveloppe)
+
+    def _archiver(self):
+        AnneeAcademique.objects.filter(pk=self.a.annee.pk).update(archivee=True)
+
+    def _fermer(self):
+        maintenant = timezone.now()
+        Devoir.objects.filter(pk=self.a.devoir.pk).update(date_debut=maintenant - timedelta(days=2),
+                                                          date_fin=maintenant - timedelta(days=1))
+
+    def _verifie_conflit_sous_verrou(self, cible, changement, resoumission):
+        if resoumission:
+            self.premiere_version()
+        appels, patch = self._change_apres_premier_controle(cible, changement)
+        with patch:
+            res = self.soumettre()
+        self.assertEqual(len(appels), 2)
+        self.assertEqual(res.status_code, 409, res.data)
+        self.assertFalse(VersionSoumission.objects.exists())
+        self.assertEqual(SoumissionDevoir.objects.count(), 1 if resoumission else 0)
+        if resoumission:
+            self.assertEqual(SoumissionDevoir.objects.get().numero_version, 1)
+
+    def test_annee_archivee_sous_verrou_premiere_soumission(self):
+        self._verifie_conflit_sous_verrou('verifier_non_archivee', self._archiver, False)
+
+    def test_annee_archivee_sous_verrou_resoumission(self):
+        self._verifie_conflit_sous_verrou('verifier_non_archivee', self._archiver, True)
+
+    def test_fenetre_fermee_sous_verrou_premiere_soumission(self):
+        self._verifie_conflit_sous_verrou('verifier_fenetre_ouverte', self._fermer, False)
+
+    def test_fenetre_fermee_sous_verrou_resoumission(self):
+        self._verifie_conflit_sous_verrou('verifier_fenetre_ouverte', self._fermer, True)
 
 
 class ResoumissionTests(Base):
