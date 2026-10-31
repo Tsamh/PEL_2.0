@@ -486,6 +486,12 @@ def resultats_visibles_etudiant(soumission):
             and soumission.statut == SoumissionDevoir.CORRIGEE_AUTO)
 
 
+def nombre_versions(soumission):
+    """Versions remplacées : valeur annotée par la liste, sinon une requête."""
+    annote = getattr(soumission, 'nb_versions', None)
+    return annote if annote is not None else soumission.versions.count()
+
+
 class SoumissionDevoirSerializer(serializers.ModelSerializer):
     """Vue correcteur : réponses avec la dernière correction de chaque exercice et ses résultats complets."""
     etudiant_nom = serializers.CharField(source='etudiant.get_full_name', read_only=True)
@@ -493,12 +499,18 @@ class SoumissionDevoirSerializer(serializers.ModelSerializer):
     bareme = serializers.DecimalField(source='devoir.bareme', max_digits=12, decimal_places=2, read_only=True)
     politique_resultats = serializers.CharField(source='devoir.politique_resultats', read_only=True)
     reponses = serializers.SerializerMethodField()
+    nombre_versions = serializers.SerializerMethodField()
 
     class Meta:
         model = SoumissionDevoir
         fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'score', 'note_proposee',
-                  'commentaire', 'date_soumission', 'bareme', 'politique_resultats', 'reponses']
-        read_only_fields = ['id', 'etudiant', 'statut', 'score', 'note_proposee', 'commentaire', 'date_soumission']
+                  'commentaire', 'date_soumission', 'numero_version', 'soumission_auto', 'nombre_versions', 'bareme',
+                  'politique_resultats', 'reponses']
+        read_only_fields = ['id', 'etudiant', 'statut', 'score', 'note_proposee', 'commentaire', 'date_soumission',
+                            'numero_version', 'soumission_auto']
+
+    def get_nombre_versions(self, soumission):
+        return nombre_versions(soumission)
 
     def correction(self, reponse):
         if self.context.get('resume'):
@@ -530,13 +542,22 @@ class SoumissionDevoirEtudiantSerializer(serializers.ModelSerializer):
     note_proposee = serializers.SerializerMethodField()
     commentaire = serializers.SerializerMethodField()
     reponses = serializers.SerializerMethodField()
+    nombre_versions = serializers.SerializerMethodField()
+    resoumission_possible = serializers.SerializerMethodField()
 
     class Meta:
         model = SoumissionDevoir
         fields = ['id', 'devoir', 'devoir_titre', 'etudiant', 'etudiant_nom', 'statut', 'resultats_visibles',
-                  'score', 'note_proposee', 'commentaire', 'date_soumission', 'bareme', 'politique_resultats',
-                  'reponses']
+                  'score', 'note_proposee', 'commentaire', 'date_soumission', 'numero_version', 'soumission_auto',
+                  'nombre_versions', 'resoumission_possible', 'bareme', 'politique_resultats', 'reponses']
         read_only_fields = fields
+
+    def get_nombre_versions(self, soumission):
+        return nombre_versions(soumission)
+
+    def get_resoumission_possible(self, soumission):
+        from .versions import resoumission_possible
+        return resoumission_possible(soumission)
 
     def get_resultats_visibles(self, soumission):
         return resultats_visibles_etudiant(soumission)
