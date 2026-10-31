@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import api from '../services/api';
+import { avantDeconnexion } from '../pages/student/useBrouillons';
 
 const AuthContext = createContext(null);
 
@@ -32,6 +33,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    avantDeconnexion();
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     setUser(null);
