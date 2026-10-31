@@ -5,14 +5,16 @@ from unittest import mock
 
 from django.core import mail
 from django.core.management import call_command
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from accounts.testing import build_world, make_user
 from audit.models import AuditLog
 from programming import cloture
 from programming.models import (
-    BrouillonExercice, Devoir, Execution, ReponseExercice, SessionDevoir, SoumissionDevoir,
+    BrouillonExercice, Devoir, Exercice, Execution, ReponseExercice, SessionDevoir, SoumissionDevoir,
 )
 from referentiel.models import Inscription
 
@@ -195,6 +197,47 @@ class ClotureTests(TestCase):
         self.assertEqual(list(SoumissionDevoir.objects.values_list('etudiant', flat=True)), [self.etu.pk])
         self.assertTrue(BrouillonExercice.objects.filter(etudiant=autre).exists())
 
+    def test_brouillon_invalide_ignore_seul_les_valides_soumis(self):
+        ex2 = Exercice.objects.create(devoir=self.devoir, ordre=2, titre='Deux')
+        self.brouillon(contenu='print(4)')
+        BrouillonExercice.objects.create(etudiant=self.etu, exercice=ex2, fichiers=[])
+        with self.assertLogs('programming', level='ERROR') as journal:
+            self.assertEqual(self.cloturer(), 1)
+        self.assertTrue(any(f'exercice {ex2.pk}' in ligne for ligne in journal.output), journal.output)
+        s = SoumissionDevoir.objects.get()
+        self.assertEqual(list(s.reponses.values_list('exercice', flat=True)), [self.ex.pk])
+        self.assertFalse(BrouillonExercice.objects.exists())
+
+    def test_aucun_brouillon_valide_pas_de_soumission(self):
+        BrouillonExercice.objects.create(etudiant=self.etu, exercice=self.ex, fichiers=[])
+        with self.assertLogs('programming', level='ERROR'):
+            self.assertEqual(self.cloturer(), 0)
+        self.assertFalse(SoumissionDevoir.objects.exists())
+        self.assertTrue(BrouillonExercice.objects.exists())
+
+    def test_fermeture_depassee_de_exactement_30_s(self):
+        self.dates(self.maintenant - timedelta(days=1), self.maintenant - timedelta(seconds=30))
+        self.brouillon()
+        self.assertEqual(self.cloturer(), 0)
+        self.assertFalse(SoumissionDevoir.objects.exists())
+
+    def test_verrou_du_devoir_sans_jointure_externe(self):
+        """PostgreSQL refuse FOR UPDATE sur le côté nullable d'une jointure externe (annee_academique nullable)."""
+        self.brouillon()
+        with CaptureQueriesContext(connection) as requetes:
+            self.assertEqual(self.cloturer(), 1)
+        sur_devoir = [r['sql'] for r in requetes if 'FROM "programming_devoir"' in r['sql']]
+        self.assertTrue(sur_devoir)
+        self.assertFalse([sql for sql in sur_devoir if 'OUTER JOIN' in sql], sur_devoir)
+
+    def test_devoir_ouvert_aucune_transaction_verrouillee(self):
+        self.dates(self.maintenant - timedelta(days=1), self.maintenant + timedelta(days=1))
+        self.brouillon()
+        with mock.patch.object(Devoir.objects, 'select_for_update', wraps=Devoir.objects.select_for_update) as verrou:
+            self.assertEqual(self.cloturer(), 0)
+        verrou.assert_not_called()
+        self.assertTrue(BrouillonExercice.objects.exists())
+
     def test_langage_autre_reste_soumis(self):
         Devoir.objects.filter(pk=self.devoir.pk).update(langage='autre')
         self.brouillon(contenu='x')
@@ -220,3 +263,9 @@ class ClotureTests(TestCase):
                 self.assertLogs('programming.execution', level='ERROR'):
             Command()._reprendre()
         reprise.assert_called_once()
+
+    def test_echec_de_reprise_n_empeche_pas_la_cloture(self):
+        from programming.management.commands.executer_file import Command
+        with mock.patch('programming.execution.file.recuperer_bloquees', side_effect=RuntimeError('boum')),                 mock.patch('programming.cloture.cloturer_devoirs_echus') as fermeture,                 self.assertLogs('programming.execution', level='ERROR'):
+            Command()._reprendre()
+        fermeture.assert_called_once()

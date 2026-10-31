@@ -3,7 +3,7 @@
 Appelée par `executer_file` : pour chaque étudiant affecté qui a des brouillons et aucune soumission, dont la fenêtre
 est fermée depuis plus de `DELAI_GRACE`, le dernier enregistrement devient sa soumission (`soumission_auto`).
 Un devoir sans fermeture, une année archivée, un devoir non publié ou un étudiant plus affecté ne sont jamais clôturés
-(brouillons gardés). Un brouillon invalide ne donne pas de soumission : l'erreur est journalisée.
+(brouillons gardés). Un brouillon invalide est ignoré et journalisé ; sans brouillon valide, pas de soumission.
 """
 import logging
 from datetime import timedelta
@@ -35,7 +35,7 @@ def fermee_depuis_assez_longtemps(devoir, etudiant, maintenant):
     fermetures = [fin for _, fin in fenetre.intervalles]
     if not fermetures or None in fermetures:
         return False
-    return maintenant - max(fermetures) >= DELAI_GRACE
+    return maintenant - max(fermetures) > DELAI_GRACE
 
 
 def _brouillons_sans_soumission():
@@ -50,8 +50,13 @@ def _brouillons_sans_soumission():
 def _cloturer(devoir_id, etudiant_id, maintenant):
     """Crée la soumission automatique d'un étudiant, ou renvoie None s'il n'y a pas lieu ; tout sous verrou."""
     etudiant = get_user_model().objects.get(pk=etudiant_id)
+    devoir = Devoir.objects.filter(pk=devoir_id).first()
+    # Sans verrou : un devoir encore ouvert ne coûte ni transaction ni verrou ; l'état est relu sous verrou.
+    if devoir is None or not fermee_depuis_assez_longtemps(devoir, etudiant, maintenant):
+        return None
     with transaction.atomic():
-        devoir = Devoir.objects.select_for_update().select_related('annee_academique').filter(pk=devoir_id).first()
+        # Verrou sans jointure : `annee_academique` est nullable, PostgreSQL refuse FOR UPDATE sur un LEFT JOIN.
+        devoir = Devoir.objects.select_for_update().filter(pk=devoir_id).first()
         if devoir is None or not devoir.est_publie:
             return None
         if devoir.annee_academique is not None and devoir.annee_academique.archivee:
@@ -64,8 +69,15 @@ def _cloturer(devoir_id, etudiant_id, maintenant):
             return None
         brouillons = (BrouillonExercice.objects.filter(etudiant=etudiant, exercice__devoir=devoir)
                       .order_by('exercice__ordre', 'exercice_id'))
-        reponses = valider_reponses(
-            devoir, [{'exercice': b.exercice_id, 'fichiers': b.fichiers} for b in brouillons] or None)
+        reponses = []
+        for b in brouillons:
+            try:
+                reponses += valider_reponses(devoir, [{'exercice': b.exercice_id, 'fichiers': b.fichiers}])
+            except ValidationError as erreur:
+                logger.error("Clôture : brouillon invalide ignoré (devoir %s, etudiant %s, exercice %s) : %s",
+                             devoir_id, etudiant_id, b.exercice_id, erreur.detail)
+        if not reponses:
+            return None
         soumission = versions.creer_soumission(devoir, etudiant, reponses, auto=True)
     audit_log(None, 'soumission_devoir_auto', cible=soumission, acteur=etudiant,
               etablissement=etablissement_evaluation(devoir),
