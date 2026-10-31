@@ -47,6 +47,9 @@ class ExercicesSurPlaceTests(TestCase):
     def renumeroter(self, exercices):
         return [{**e, 'ordre': i + 1} for i, e in enumerate(exercices)]
 
+    def sans_id(self, exercices):
+        return [{cle: v for cle, v in e.items() if cle != 'id'} for e in exercices]
+
     def ids(self):
         return list(self.devoir.exercices.order_by('ordre', 'id').values_list('id', flat=True))
 
@@ -85,8 +88,8 @@ class ExercicesSurPlaceTests(TestCase):
     def test_rang_compte_parmi_les_exercices_non_apparies(self):
         a, b, c = self.lire()
         b['titre'] = 'Renommé'
-        # A et B sont sans titre reçu : « Renommé » prend le premier d'entre eux (A), et B, resté seul, part.
-        self.envoyer(self.renumeroter([b, c]))
+        # Client d'API sans identifiant : « Renommé » prend le premier de ceux sans titre reçu (A), et B, resté seul, part.
+        self.envoyer(self.sans_id(self.renumeroter([b, c])))
         self.assertEqual(self.ids(), [self.ex_a.id, self.ex_c.id])
         self.ex_a.refresh_from_db()
         self.assertEqual(self.ex_a.titre, 'Renommé')
@@ -121,6 +124,81 @@ class ExercicesSurPlaceTests(TestCase):
         self.assertEqual(BrouillonExercice.objects.count(), 3)
         self.brouillon(lignes[0], 'neuf')
 
+    def test_retrait_et_renumerotation_gardent_chaque_brouillon(self):
+        a, b, c = self.lire()
+        b['titre'], c['titre'] = 'Exercice 1', 'Exercice 2'
+        self.envoyer(self.renumeroter([b, c]))
+        self.assertEqual(self.ids(), [self.ex_b.id, self.ex_c.id])
+        self.assertEqual(self.travail(self.ex_b), f'travail {self.ex_b.pk}')
+        self.assertEqual(self.travail(self.ex_c), f'travail {self.ex_c.pk}')
+        self.assertFalse(BrouillonExercice.objects.filter(exercice_id=self.ex_a.pk).exists())
+        self.assertEqual(BrouillonExercice.objects.count(), 2)
+
+    def test_retrait_et_ajout_ne_donnent_aucun_brouillon_au_nouvel_exercice(self):
+        a, b, c = self.lire()
+        nouveau = {'titre': 'Graphes', 'points': '5', 'tests': [{'entree': '', 'sortie_attendue': 'x'}]}
+        self.envoyer(self.renumeroter([nouveau, b, c]))
+        graphes = self.devoir.exercices.get(titre='Graphes')
+        self.assertNotIn(graphes.pk, [self.ex_a.pk, self.ex_b.pk, self.ex_c.pk])
+        self.assertFalse(BrouillonExercice.objects.filter(exercice=graphes).exists())
+        self.assertFalse(Exercice.objects.filter(pk=self.ex_a.pk).exists())
+        self.assertEqual(self.travail(self.ex_b), f'travail {self.ex_b.pk}')
+        self.assertEqual(self.travail(self.ex_c), f'travail {self.ex_c.pk}')
+
+    def test_titres_en_double_retrait_du_premier(self):
+        Exercice.objects.filter(pk=self.ex_c.pk).update(titre='Exercice B')
+        a, b, c = self.lire()
+        self.envoyer(self.renumeroter([a, c]))
+        self.assertEqual(self.ids(), [self.ex_a.id, self.ex_c.id])
+        self.assertEqual(self.travail(self.ex_c), f'travail {self.ex_c.pk}')
+        self.assertFalse(BrouillonExercice.objects.filter(exercice_id=self.ex_b.pk).exists())
+
+    def test_identifiant_d_un_autre_devoir_ignore(self):
+        autre = self.w.b.exercice
+        avant = (autre.titre, autre.enonce, autre.devoir_id)
+        a, b, c = self.lire()
+        etranger = {**a, 'id': autre.pk, 'titre': 'Piraté', 'enonce': 'piraté'}
+        self.envoyer(self.renumeroter([etranger, b, c]))
+        autre.refresh_from_db()
+        self.assertEqual((autre.titre, autre.enonce, autre.devoir_id), avant)
+        piraté = self.devoir.exercices.get(titre='Piraté')
+        self.assertNotIn(piraté.pk, [autre.pk, self.ex_a.pk])
+        self.assertFalse(BrouillonExercice.objects.filter(exercice=piraté).exists())
+        self.assertFalse(Exercice.objects.filter(pk=self.ex_a.pk).exists())
+        self.assertEqual(self.travail(self.ex_b), f'travail {self.ex_b.pk}')
+
+    def test_identifiant_repete_traite_comme_absent(self):
+        a, b, c = self.lire()
+        copie = {**b, 'titre': 'Copie de B', 'enonce': 'copie'}
+        self.envoyer(self.renumeroter([a, b, copie, c]))
+        self.assertEqual(self.devoir.exercices.count(), 4)
+        self.assertEqual(self.devoir.exercices.filter(pk=self.ex_a.pk).count(), 1)
+        self.assertEqual(self.devoir.exercices.filter(pk=self.ex_c.pk).count(), 1)
+        self.assertFalse(Exercice.objects.filter(pk=self.ex_b.pk).exists())
+        self.assertEqual(self.travail(self.ex_a), f'travail {self.ex_a.pk}')
+        self.assertEqual(self.travail(self.ex_c), f'travail {self.ex_c.pk}')
+        self.assertEqual(BrouillonExercice.objects.count(), 2)
+
+    def test_sans_identifiant_titre_puis_rang(self):
+        a, b, c = self.lire()
+        b['titre'] = 'Renommé'
+        self.envoyer(self.sans_id(self.renumeroter([c, a, b])))
+        self.assertEqual(self.ids(), [self.ex_c.id, self.ex_a.id, self.ex_b.id])
+        self.assertEqual(self.travail(self.ex_c), f'travail {self.ex_c.pk}')
+        self.assertEqual(self.travail(self.ex_a), f'travail {self.ex_a.pk}')
+        self.ex_b.refresh_from_db()
+        self.assertEqual(self.ex_b.titre, 'Renommé')
+
+    def test_creation_d_un_devoir_avec_identifiants_les_ignore(self):
+        d = self.lire()
+        corps = {k: v for k, v in self.ens.get(f'{P}/devoirs/{self.devoir.id}/').data.items()
+                 if k in ('titre', 'langage', 'objectifs', 'consignes', 'ressources')}
+        res = self.ens.post(f'{P}/devoirs/', {**corps, 'titre': 'Copie', 'exercices': d}, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        nouveau = Devoir.objects.get(pk=res.data['id'])
+        self.assertEqual(nouveau.exercices.count(), 3)
+        self.assertFalse(set(nouveau.exercices.values_list('id', flat=True)) & {self.ex_a.pk, self.ex_b.pk, self.ex_c.pk})
+
     def test_tests_modifies_remplaces(self):
         exercices = self.lire()
         ancien = self.ex_a.tests.get()
@@ -133,8 +211,8 @@ class ExercicesSurPlaceTests(TestCase):
 
     def test_champs_absents_remis_a_leur_valeur_par_defaut(self):
         Exercice.objects.filter(pk=self.ex_b.pk).update(enonce='ancien', limite_temps_ms=3000)
-        a, _, c = self.lire()
-        self.envoyer([a, {'titre': 'Exercice B', 'points': '5', 'ordre': 2}, c])
+        a, b, c = self.lire()
+        self.envoyer([a, {'id': b['id'], 'titre': 'Exercice B', 'points': '5', 'ordre': 2}, c])
         self.ex_b.refresh_from_db()
         self.assertEqual((self.ex_b.enonce, self.ex_b.limite_temps_ms), ('', 2000))
 

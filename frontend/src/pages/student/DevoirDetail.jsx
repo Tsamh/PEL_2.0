@@ -504,7 +504,7 @@ function DevoirEtudiant({ id, utilisateurId }) {
                   )}
                   {nonSoumis && (
                     <div className="alert alert-error" style={{ marginTop: '8px' }}>
-                      Vos modifications enregistrées ne sont pas soumises : à la fermeture, seule la version {soumission.numero_version} compte. Cliquez sur « Soumettre une nouvelle version ».
+                      Vos modifications ne sont pas soumises : à la fermeture, seule la version {soumission.numero_version} compte. Cliquez sur « Soumettre une nouvelle version ».
                     </div>
                   )}
                 </>

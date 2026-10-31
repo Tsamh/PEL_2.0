@@ -128,6 +128,8 @@ class CasDeTestSerializer(serializers.ModelSerializer):
 
 class ExerciceSerializer(serializers.ModelSerializer):
     """Exercice saisi dans le formulaire du devoir (vue enseignant : solution et tous les tests)."""
+    # Identifiant en écriture facultatif : il sert à retrouver la ligne existante, jamais à en créer une.
+    id = serializers.IntegerField(required=False)
     tests = CasDeTestSerializer(many=True, required=False)
     competences = serializers.PrimaryKeyRelatedField(
         many=True, required=False, queryset=TagQuestion.objects.filter(type=TagQuestion.COMPETENCE),
@@ -139,7 +141,6 @@ class ExerciceSerializer(serializers.ModelSerializer):
         fields = ['id', 'ordre', 'titre', 'enonce', 'contraintes', 'exemples', 'fichiers_initiaux', 'solution',
                   'points', 'difficulte', 'limite_temps_ms', 'limite_memoire_mo', 'competences', 'competences_detail',
                   'tests']
-        read_only_fields = ['id']
         extra_kwargs = {'enonce': {'trim_whitespace': False}, 'contraintes': {'trim_whitespace': False}}
 
     def get_competences_detail(self, exercice):
@@ -180,6 +181,7 @@ def _creer_tests(exercice, tests_data):
 def _creer_exercices(devoir, exercices_data):
     for i, e_data in enumerate(exercices_data):
         e_data = dict(e_data)
+        e_data.pop('id', None)
         tests_data = e_data.pop('tests', [])
         competences = e_data.pop('competences', [])
         e_data.setdefault('ordre', i + 1)
@@ -193,19 +195,28 @@ CHAMPS_EXERCICE = ('titre', 'enonce', 'contraintes', 'exemples', 'fichiers_initi
 
 
 def _apparier_exercices(actuels, recus):
-    """Sans identifiant dans la requête : d'abord le titre exact, puis le rang parmi ceux qui restent de chaque côté.
+    """Chaque exercice reçu retrouve sa ligne par `id`, sans jamais deviner quand la requête en porte.
 
+    Un `id` étranger au devoir ou répété dans la requête compte comme absent. Un exercice sans `id` est alors nouveau,
+    sauf si la requête n'en porte aucun (client d'API) : d'abord le titre exact, puis le rang parmi ceux qui restent.
     Renvoie (exercice actuel ou None pour chaque élément de `recus`, exercices actuels sans correspondant).
     """
-    libres = list(actuels)
+    par_id = {e.pk: e for e in actuels}
+    envoyes = [data.get('id') for data in recus]
     paires = [None] * len(recus)
-    for i, data in enumerate(recus):
-        paires[i] = next((e for e in libres if e.titre == data.get('titre', '')), None)
-        if paires[i] is not None:
+    libres = list(actuels)
+    for i, identifiant in enumerate(envoyes):
+        if identifiant in par_id and envoyes.count(identifiant) == 1:
+            paires[i] = par_id[identifiant]
             libres.remove(paires[i])
-    for i in range(len(recus)):
-        if paires[i] is None and libres:
-            paires[i] = libres.pop(0)
+    if all(identifiant is None for identifiant in envoyes):
+        for i, data in enumerate(recus):
+            paires[i] = next((e for e in libres if e.titre == data.get('titre', '')), None)
+            if paires[i] is not None:
+                libres.remove(paires[i])
+        for i in range(len(recus)):
+            if paires[i] is None and libres:
+                paires[i] = libres.pop(0)
     return paires, libres
 
 

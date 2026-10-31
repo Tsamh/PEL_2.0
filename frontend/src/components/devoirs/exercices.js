@@ -34,6 +34,7 @@ const copieFichiers = (fichiers) => (fichiers || []).map((f) => ({ nom: f.nom, c
 
 // Exercice lu dans l'API vers l'état du formulaire (le texte est gardé tel quel).
 export const depuisApi = (e) => ({
+  id: e.id,
   cle: nouvelleCle(),
   titre: e.titre, enonce: e.enonce || '', contraintes: e.contraintes || '',
   exemples: (e.exemples || []).map((x) => ({ entree: x.entree || '', sortie: x.sortie || '', explication: x.explication || '' })),
@@ -53,7 +54,9 @@ export const renommerFichiers = (fichiers, langage) => fichiers.map((f) => {
 });
 
 // Format d'écriture de l'API : liste complète des exercices avec leurs tests ; l'ordre suit la liste.
+// L'identifiant d'un exercice déjà enregistré est renvoyé : ses brouillons suivent la ligne, pas le titre ni le rang.
 export const versPayload = (exercices) => exercices.map((e, i) => ({
+  ...(e.id != null ? { id: e.id } : {}),
   ordre: i + 1, titre: e.titre, enonce: e.enonce, contraintes: e.contraintes,
   exemples: e.exemples.map((x) => ({ entree: x.entree, sortie: x.sortie, explication: x.explication })),
   fichiers_initiaux: copieFichiers(e.fichiers_initiaux),
