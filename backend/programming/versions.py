@@ -1,11 +1,13 @@
 """Resoumissions : archivage de la version en cours, remise à zéro, historique des versions."""
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from quiz import fenetres
 from quiz.exceptions import Conflit
+from . import accuses
 from .execution import file as file_execution
-from .models import Execution, ReponseExercice, SoumissionDevoir, VersionSoumission
+from .models import BrouillonExercice, Execution, ReponseExercice, SoumissionDevoir, VersionSoumission
 from .views_execution import ACTIVES, langage_executable
 
 MESSAGE_CORRECTION_EN_COURS = "Une correction est en cours : réessayez à la fin."
@@ -111,3 +113,22 @@ def donnees_version(version, complet, resultats_visibles):
         'note_proposee': str(note) if montrer and note is not None else None,
         'reponses': reponses,
     }
+
+
+def creer_soumission(devoir, etudiant, reponses, auto=False):
+    """Première soumission (devoir verrouillé, `reponses` de `valider_reponses`) : réponses, corrections en file,
+    brouillons supprimés, accusé envoyé après validation de la transaction.
+
+    Les brouillons sont gardés si le devoir autorise la resoumission, sauf pour une soumission automatique
+    (`auto`, à la fermeture) qui les supprime toujours. Un langage que le service n'exécute pas laisse la soumission `soumis`.
+    """
+    soumission = SoumissionDevoir.objects.create(devoir=devoir, etudiant=etudiant, soumission_auto=auto)
+    ReponseExercice.objects.bulk_create([
+        ReponseExercice(soumission=soumission, exercice=exercice, fichiers=fichiers) for exercice, fichiers in reponses
+    ])
+    if langage_executable(devoir):
+        file_execution.corriger_soumission(soumission)
+    if auto or not devoir.resoumission_autorisee:
+        BrouillonExercice.objects.filter(etudiant=etudiant, exercice__devoir=devoir).delete()
+    transaction.on_commit(lambda s=soumission: accuses.envoyer_accuse(s))
+    return soumission

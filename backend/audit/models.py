@@ -42,6 +42,7 @@ class AuditLog(models.Model):
         ('archivage_annee', "Archivage d'une année académique"),
         ('desarchivage_annee', "Désarchivage d'une année académique"),
         ('resoumission_devoir', 'Resoumission de devoir'),
+        ('soumission_devoir_auto', 'Soumission automatique de devoir'),
     ]
 
     acteur = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='actions_auditees')

@@ -13,6 +13,7 @@ from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections, connection
 
+from programming import cloture
 from programming.execution import file as fichier_attente
 
 logger = logging.getLogger('programming.execution')
@@ -79,11 +80,21 @@ class Command(BaseCommand):
 
     def _reprendre(self):
         # Connexion renouvelée à chaque passage : après une coupure de la base, la reprise reprend d'elle-même.
+        # La clôture a son propre `try` : son échec ne saute pas la reprise, et inversement.
         try:
             close_old_connections()
             fichier_attente.recuperer_bloquees()
         except Exception:  # noqa: BLE001
             logger.exception("Reprise des exécutions bloquées impossible")
+            try:
+                connection.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            close_old_connections()
+            cloture.cloturer_devoirs_echus()
+        except Exception:  # noqa: BLE001
+            logger.exception("Soumission automatique à la fermeture impossible")
             try:
                 connection.close()
             except Exception:  # noqa: BLE001

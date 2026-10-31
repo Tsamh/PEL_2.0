@@ -25,7 +25,7 @@ from referentiel.archives import ArchiveMixin, filtrer_archives, verifier_non_ar
 from .execution import file as file_execution
 from .execution.executeur import MESSAGE_LANGAGE
 from . import accuses, versions
-from .models import BrouillonExercice, Devoir, Execution, ReponseExercice, ResultatTest, SoumissionDevoir, NoteMatiere
+from .models import Devoir, Execution, ResultatTest, SoumissionDevoir, NoteMatiere
 from .serializers import (
     DevoirSerializer, DevoirEtudiantSerializer, SoumissionDevoirSerializer, SoumissionDevoirEtudiantSerializer,
     SoumissionDevoirUpdateSerializer,
@@ -273,18 +273,9 @@ class SoumissionDevoirViewSet(ArchiveMixin, EtablissementScopedMixin, viewsets.M
                 if soumission is not None:
                     resoumission = True
                     versions.resoumettre(soumission, reponses)
+                    transaction.on_commit(lambda s=soumission: accuses.envoyer_accuse(s))
                 else:
-                    soumission = SoumissionDevoir.objects.create(devoir=devoir, etudiant=etudiant)
-                    ReponseExercice.objects.bulk_create([
-                        ReponseExercice(soumission=soumission, exercice=exercice, fichiers=fichiers)
-                        for exercice, fichiers in reponses
-                    ])
-                    if langage_executable(devoir):
-                        # Seule une soumission qui vient d'être créée est mise en correction ici.
-                        file_execution.corriger_soumission(soumission)
-                if not devoir.resoumission_autorisee:
-                    BrouillonExercice.objects.filter(etudiant=etudiant, exercice__devoir=devoir).delete()
-                transaction.on_commit(lambda s=soumission: accuses.envoyer_accuse(s))
+                    soumission = versions.creer_soumission(devoir, etudiant, reponses)
         except IntegrityError:
             # Deux envois simultanés : la contrainte d'unicité tranche, sans erreur 500.
             raise Conflit(MESSAGE_DEJA_SOUMIS)
