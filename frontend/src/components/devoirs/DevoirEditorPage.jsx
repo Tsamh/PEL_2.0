@@ -327,6 +327,11 @@ export default function DevoirEditorPage({ titre, texteVide, sousTexteVide }) {
                   )}
                 </div>
 
+                {editingItem?.a_des_brouillons && !verrouille && (
+                  <div className="alert alert-error">
+                    Des étudiants travaillent sur ce devoir. Leur travail enregistré est conservé pour chaque exercice ; supprimer un exercice supprime leurs brouillons, et changer le langage peut rendre leurs brouillons inutilisables.
+                  </div>
+                )}
                 {verrouille ? (
                   <div>
                     <div className="alert alert-error">{MESSAGE_VERROU} Les autres informations restent modifiables.</div>

@@ -11,8 +11,8 @@ from quiz.exceptions import Conflit
 from quiz.models import TagQuestion
 from .execution import BUDGET_TESTS_MS, texte_stockable
 from .execution.langages import fichier_principal, message_principal, nom_refuse
-from .models import CasDeTest, Devoir, Execution, Exercice, SoumissionDevoir, NoteMatiere
-from .validation import PROFIL_DEVOIR, exercices_modifies
+from .models import BrouillonExercice, CasDeTest, Devoir, Execution, Exercice, SoumissionDevoir, NoteMatiere
+from .validation import PROFIL_DEVOIR, contenu_exercice, exercices_modifies, ordonnes
 
 MESSAGE_VERROU = "Ce devoir a déjà des soumissions : ses exercices et ses tests ne peuvent plus être modifiés."
 MESSAGE_COMPETENCE = "Une compétence choisie n'est pas disponible pour cet établissement."
@@ -170,6 +170,13 @@ class ExerciceSerializer(serializers.ModelSerializer):
         return attrs
 
 
+def _creer_tests(exercice, tests_data):
+    for j, t_data in enumerate(tests_data):
+        t_data = dict(t_data)
+        t_data.setdefault('ordre', j + 1)
+        CasDeTest.objects.create(exercice=exercice, **t_data)
+
+
 def _creer_exercices(devoir, exercices_data):
     for i, e_data in enumerate(exercices_data):
         e_data = dict(e_data)
@@ -178,10 +185,62 @@ def _creer_exercices(devoir, exercices_data):
         e_data.setdefault('ordre', i + 1)
         exercice = Exercice.objects.create(devoir=devoir, **e_data)
         exercice.competences.set(competences)
-        for j, t_data in enumerate(tests_data):
-            t_data = dict(t_data)
-            t_data.setdefault('ordre', j + 1)
-            CasDeTest.objects.create(exercice=exercice, **t_data)
+        _creer_tests(exercice, tests_data)
+
+
+CHAMPS_EXERCICE = ('titre', 'enonce', 'contraintes', 'exemples', 'fichiers_initiaux', 'solution', 'points', 'difficulte',
+                   'limite_temps_ms', 'limite_memoire_mo')
+
+
+def _apparier_exercices(actuels, recus):
+    """Sans identifiant dans la requête : d'abord le titre exact, puis le rang parmi ceux qui restent de chaque côté.
+
+    Renvoie (exercice actuel ou None pour chaque élément de `recus`, exercices actuels sans correspondant).
+    """
+    libres = list(actuels)
+    paires = [None] * len(recus)
+    for i, data in enumerate(recus):
+        paires[i] = next((e for e in libres if e.titre == data.get('titre', '')), None)
+        if paires[i] is not None:
+            libres.remove(paires[i])
+    for i in range(len(recus)):
+        if paires[i] is None and libres:
+            paires[i] = libres.pop(0)
+    return paires, libres
+
+
+def _mettre_a_jour_exercice(exercice, data):
+    """Remplace le contenu de l'exercice (un champ absent reprend sa valeur par défaut, comme à la création).
+
+    Des tests identiques ne sont pas réécrits : les résultats d'essai qui les citent restent lisibles.
+    """
+    memes_tests = contenu_exercice(exercice)['tests'] == contenu_exercice(data)['tests']
+    for champ in CHAMPS_EXERCICE:
+        setattr(exercice, champ, data[champ] if champ in data else Exercice._meta.get_field(champ).get_default())
+    exercice.ordre = data['ordre']
+    exercice.save()
+    exercice.competences.set(data.get('competences', []))
+    if not memes_tests:
+        exercice.tests.all().delete()
+        _creer_tests(exercice, data.get('tests', []))
+
+
+def _mettre_a_jour_exercices(devoir, exercices_data):
+    """Les exercices gardent leur identifiant : brouillons et onglets ouverts des étudiants restent valables.
+
+    Seul un exercice sans correspondant disparaît, avec ses brouillons. Aucune contrainte d'unicité ne porte sur `ordre`,
+    qui est rendu strictement croissant : le tri (`ordre`, `id`) suit la liste reçue, même avec des rangs égaux.
+    """
+    recus = ordonnes([{**e, 'ordre': e.get('ordre', i + 1)} for i, e in enumerate(exercices_data)])
+    precedent = -1
+    for data in recus:
+        data['ordre'] = precedent = max(data['ordre'], precedent + 1)
+    paires, sans_correspondant = _apparier_exercices(devoir.exercices.order_by('ordre', 'id'), recus)
+    Exercice.objects.filter(pk__in=[e.pk for e in sans_correspondant]).delete()
+    for exercice, data in zip(paires, recus):
+        if exercice is not None:
+            _mettre_a_jour_exercice(exercice, data)
+    _creer_exercices(devoir, [data for exercice, data in zip(paires, recus) if exercice is None])
 
 
 def _nom(user):
@@ -205,6 +264,7 @@ class DevoirSerializer(serializers.ModelSerializer):
     validation_requise = serializers.SerializerMethodField()
     valide_par_nom = serializers.SerializerMethodField()
     a_des_soumissions = serializers.SerializerMethodField()
+    a_des_brouillons = serializers.SerializerMethodField()
     fichier_principal = serializers.SerializerMethodField()
 
     class Meta:
@@ -243,6 +303,9 @@ class DevoirSerializer(serializers.ModelSerializer):
 
     def get_a_des_soumissions(self, devoir):
         return devoir.soumissions.exists()
+
+    def get_a_des_brouillons(self, devoir):
+        return BrouillonExercice.objects.filter(exercice__devoir=devoir).exists()
 
     def get_fichier_principal(self, devoir):
         return fichier_principal(devoir.langage)
@@ -311,21 +374,20 @@ class DevoirSerializer(serializers.ModelSerializer):
         exercices_data = validated_data.pop('exercices', None)
         cibles_data = {cle: validated_data.pop(cle) for cle in CLES_CIBLES if cle in validated_data}
         with transaction.atomic():
-            # Le devoir est verrouillé : une soumission ne peut pas apparaître entre le contrôle et le remplacement.
+            # Le devoir est verrouillé : une soumission ne peut pas apparaître entre le contrôle et la mise à jour.
             Devoir.objects.select_for_update().get(pk=instance.pk)
             # Des exercices renvoyés à l'identique ne sont pas réécrits : les réponses qui les citent restent valables.
-            remplacer = exercices_data is not None and exercices_modifies(instance, exercices_data)
+            modifier = exercices_data is not None and exercices_modifies(instance, exercices_data)
             langage_change = 'langage' in validated_data and validated_data['langage'] != instance.langage
-            if (remplacer or langage_change) and instance.soumissions.exists():
+            if (modifier or langage_change) and instance.soumissions.exists():
                 raise Conflit(MESSAGE_VERROU)
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
             instance.save()
             for cle, valeurs in cibles_data.items():
                 getattr(instance, cle).set(valeurs)
-            if remplacer:
-                instance.exercices.all().delete()
-                _creer_exercices(instance, exercices_data)
+            if modifier:
+                _mettre_a_jour_exercices(instance, exercices_data)
         return instance
 
 

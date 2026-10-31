@@ -13,7 +13,7 @@ def _decimal(valeur):
     return str(Decimal(str(valeur)).quantize(Decimal('0.01')))
 
 
-def _ordonnes(elements):
+def ordonnes(elements):
     """Éléments soumis dans l'ordre où ils seront enregistrés (ordre fourni, sinon leur rang)."""
     rangs = [(e.get('ordre', i + 1), i, e) for i, e in enumerate(elements)]
     return [e for _, _, e in sorted(rangs, key=lambda r: (r[0], r[1]))]
@@ -27,7 +27,7 @@ def contenu_exercice(data):
     """Contenu comparable d'un exercice, depuis les données validées (dict) ou un objet `Exercice`."""
     if isinstance(data, dict):
         lire = data.get
-        tests = _ordonnes(data.get('tests', []))
+        tests = ordonnes(data.get('tests', []))
         competences = data.get('competences', [])
     else:
         def lire(cle, defaut=None):
@@ -60,7 +60,7 @@ def contenu_exercice(data):
 def exercices_modifies(devoir, exercices):
     """Vrai si la liste d'exercices soumise diffère, par son contenu, des exercices actuels du devoir."""
     actuels = devoir.exercices.prefetch_related('tests', 'competences').order_by('ordre', 'id')
-    return [contenu_exercice(e) for e in actuels] != [contenu_exercice(e) for e in _ordonnes(exercices)]
+    return [contenu_exercice(e) for e in actuels] != [contenu_exercice(e) for e in ordonnes(exercices)]
 
 
 def contenu_modifie(instance, attrs):
