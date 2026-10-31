@@ -11,6 +11,18 @@ export const DELAI_REPRISE_MS = 10000;
 const PREFIXE_LOCAL = 'pel-brouillon-';
 const cleLocale = (utilisateurId, devoirId, exerciceId) => `${PREFIXE_LOCAL}u${utilisateurId}-devoir-${devoirId}-${exerciceId}`;
 
+// Compte d'un jeton d'accès : la revendication `user_id` de SimpleJWT, sans vérifier la signature (seul le serveur décide
+// des droits ; ici, on évite d'envoyer le code d'un étudiant sous un autre compte). Le jeton peut changer sans que le
+// compte change : c'est donc le compte qui est comparé, jamais le texte du jeton.
+export function compteDuJeton(jeton) {
+  try {
+    return String(JSON.parse(window.atob(jeton.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).user_id);
+  } catch {
+    return null;
+  }
+}
+export const estCompteCourant = (utilisateurId) => compteDuJeton(window.localStorage.getItem('access_token')) === String(utilisateurId);
+
 // DEBUT-ENREGISTREUR (logique pure, sans React : vérifiable hors navigateur)
 // Copie locale stockée : { fichiers, date } (ms). Un tableau nu (ancien format) n'a pas de date.
 export function analyserCopie(brut) {
@@ -179,6 +191,8 @@ export default function useBrouillons(devoirId, utilisateurId, { surConflit } = 
         // Après une déconnexion : jamais sous le compte qui s'est connecté entre-temps.
         const courant = window.localStorage.getItem('access_token');
         if (jetonFige && courant && courant !== jetonFige) throw new Error('Session remplacée');
+        // Autre compte dans ce navigateur : rien ne part, la copie reste sous la clé de l'étudiant.
+        if (compteDuJeton(jetonFige ?? courant) !== String(utilisateurId)) throw new Error('Session remplacée');
         const config = jetonFige ? { headers: { Authorization: `Bearer ${jetonFige}` } } : undefined;
         const res = await api.put(`/programming/devoirs/${devoirId}/brouillons/`, { exercice, fichiers }, config);
         return res.data.modifie_le ? new Date(res.data.modifie_le) : new Date();
